@@ -110,6 +110,27 @@ export interface ReadMessage {
 }
 
 /**
+ * Device Linking Types
+ */
+export interface StartLinkResponse {
+  deviceLinkUri: string;
+}
+
+export interface FinishLinkResponse {
+  number?: string;
+  uuid?: string;
+}
+
+/**
+ * Account Information
+ */
+export interface Account {
+  number?: string;
+  uuid?: string;
+  deviceId?: number;
+}
+
+/**
  * Signal Client Events
  */
 export interface SignalClientEvents {
@@ -120,6 +141,7 @@ export interface SignalClientEvents {
   error: (error: Error) => void;
   close: (code: number | null) => void;
   ready: () => void;
+  linkSuccess: (account: FinishLinkResponse) => void;
 }
 
 /**
@@ -138,3 +160,54 @@ export interface VersionResponse {
   name: string;
   version: string;
 }
+
+/**
+ * Contact from listContacts
+ */
+export interface Contact {
+  number?: string;
+  uuid?: string;
+  name?: string;
+  profileName?: string;
+  givenName?: string;
+  familyName?: string;
+  isBlocked?: boolean;
+}
+
+/**
+ * Group from listGroups
+ */
+export interface Group {
+  id: string;
+  name?: string;
+  description?: string;
+  isMember: boolean;
+  isBlocked?: boolean;
+  members?: string[];
+}
+
+/**
+ * Unified conversation item for UI
+ */
+export interface Conversation {
+  id: string;           // number/uuid for contacts, group id for groups
+  number?: string;      // Specific phone number for contacts
+  uuid?: string;        // Specific UUID for contacts
+  type: "contact" | "group";
+  displayName: string;
+  lastMessage?: string;
+  lastMessageTime?: number;
+}
+
+/**
+ * Chat message for display
+ */
+export interface ChatMessage {
+  id: string;           // unique id (timestamp-based)
+  sender: string;       // phone number or uuid
+  senderName?: string;  // display name
+  content: string;
+  timestamp: number;
+  isOutgoing: boolean;  // true if sent by us
+}
+

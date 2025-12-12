@@ -19,4 +19,12 @@ export type {
   SignalClientEvents,
   SignalClientOptions,
   VersionResponse,
+  StartLinkResponse,
+  FinishLinkResponse,
+  Account,
+  Contact,
+  Group,
+  Conversation,
+  ChatMessage,
 } from "./types/types";
+

@@ -6,6 +6,11 @@ import type {
   SignalEnvelope,
   SignalClientEvents,
   SignalClientOptions,
+  StartLinkResponse,
+  FinishLinkResponse,
+  Account,
+  Contact,
+  Group,
 } from "../types/types";
 
 const DEFAULT_SIGNAL_CLI_PATH = "/opt/homebrew/bin/signal-cli";
@@ -163,6 +168,77 @@ export class SignalClient extends EventEmitter {
    */
   get running(): boolean {
     return this.isRunning;
+  }
+
+  /**
+   * Start the device linking process and get the URI to display as QR code
+   * 
+   * @returns Promise that resolves with the device link URI (sgnl://linkdevice?...)
+   */
+  async getLinkUri(): Promise<string> {
+    const response = await this.sendRequest<StartLinkResponse>("startLink");
+    return response.deviceLinkUri;
+  }
+
+  /**
+   * Complete the device linking process
+   * Waits for the user to scan the QR code on their phone
+   * 
+   * @param deviceLinkUri - The URI returned by getLinkUri()
+   * @param deviceName - Optional name for the linked device
+   * @returns Promise that resolves when linking is complete
+   */
+  async finishLink(deviceLinkUri: string, deviceName?: string): Promise<FinishLinkResponse> {
+    const params: Record<string, unknown> = { deviceLinkUri };
+    if (deviceName) {
+      params.deviceName = deviceName;
+    }
+    
+    const response = await this.sendRequest<FinishLinkResponse>("finishLink", params);
+    this.emit("linkSuccess", response);
+    return response;
+  }
+
+  /**
+   * List all registered local accounts
+   * 
+   * @returns Promise that resolves with array of accounts
+   */
+  async listAccounts(): Promise<Account[]> {
+    const response = await this.sendRequest<Account[]>("listAccounts");
+    return response ?? [];
+  }
+
+  /**
+   * List all known contacts
+   */
+  async listContacts(): Promise<Contact[]> {
+    const response = await this.sendRequest<Contact[]>("listContacts");
+    return response ?? [];
+  }
+
+  /**
+   * List all known groups
+   */
+  async listGroups(): Promise<Group[]> {
+    const response = await this.sendRequest<Group[]>("listGroups");
+    return response ?? [];
+  }
+
+  /**
+   * Send a message to a recipient
+   * @param recipient - Phone number, UUID, or group ID
+   * @param message - The message text
+   * @param isGroup - Whether this is a group message
+   */
+  async sendMessage(recipient: string, message: string, isGroup: boolean = false): Promise<void> {
+    const params: Record<string, unknown> = { message };
+    if (isGroup) {
+      params.groupId = recipient;
+    } else {
+      params.recipient = [recipient];
+    }
+    await this.sendRequest("send", params);
   }
 
   /**
