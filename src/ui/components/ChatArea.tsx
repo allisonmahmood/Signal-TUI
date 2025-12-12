@@ -2,6 +2,8 @@ import { useState, useEffect, useRef } from "react";
 import { Box, Text, useInput, useStdout } from "ink";
 import { SignalClient } from "../../core/SignalClient.ts";
 import type { Conversation, Account, ChatMessage, SignalEnvelope } from "../../types/types.ts";
+import { MessageStorage } from "../../core/MessageStorage.ts";
+import { normalizeNumber } from "../../utils/phone.ts";
 import MessageInput from "./MessageInput.tsx";
 
 interface ChatAreaProps {
@@ -9,13 +11,15 @@ interface ChatAreaProps {
   client?: SignalClient | null;
   selectedConversation?: Conversation | null;
   currentAccount?: Account | null;
+  storage?: MessageStorage;
 }
 
 export default function ChatArea({ 
   currentView, 
   client, 
   selectedConversation,
-  currentAccount 
+  currentAccount,
+  storage
 }: ChatAreaProps) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [scrollOffset, setScrollOffset] = useState(0);
@@ -31,8 +35,13 @@ export default function ChatArea({
   useEffect(() => {
     setMessages([]);
     setScrollOffset(0);
-    // TODO: Load history if available
-  }, [selectedConversation?.id]);
+    
+    // Load history from storage
+    if (storage && selectedConversation) {
+        const history = storage.getMessages(selectedConversation.id, 50);
+        setMessages(history);
+    }
+  }, [selectedConversation?.id, storage]);
 
   // Handle incoming messages
   useEffect(() => {
@@ -48,11 +57,11 @@ export default function ChatArea({
         )) ||
         // Direct message/Sync matches number or UUID
         (selectedConversation.type === "contact" && (
-          // Check incoming match
-          (selectedConversation.number && envelope.sourceNumber === selectedConversation.number) ||
+          // Check incoming match (NORMALIZED)
+          (selectedConversation.number && normalizeNumber(envelope.sourceNumber) === normalizeNumber(selectedConversation.number)) ||
           (selectedConversation.uuid && envelope.sourceUuid === selectedConversation.uuid) ||
-          // Check sync match (sent to contact)
-          (selectedConversation.number && envelope.syncMessage?.sentMessage?.destinationNumber === selectedConversation.number) ||
+          // Check sync match (sent to contact) (NORMALIZED)
+          (selectedConversation.number && normalizeNumber(envelope.syncMessage?.sentMessage?.destinationNumber) === normalizeNumber(selectedConversation.number)) ||
           (selectedConversation.uuid && envelope.syncMessage?.sentMessage?.destinationUuid === selectedConversation.uuid)
         ));
 
@@ -121,6 +130,11 @@ export default function ChatArea({
       };
       setMessages(prev => [...prev, optimisitcMessage]);
       setScrollOffset(0);
+
+      // Persist locally
+      if (storage) {
+        storage.addMessage(optimisitcMessage, selectedConversation.id);
+      }
 
       await client.sendMessage(
         selectedConversation.id, 

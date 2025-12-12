@@ -4,6 +4,7 @@ import ChatArea from "./ChatArea.tsx";
 import Onboarding, { type LinkStatus } from "./Onboarding.tsx";
 import { SignalClient } from "../../core/SignalClient.ts";
 import type { Account, Conversation } from "../../types/types.ts";
+import { MessageStorage } from "../../core/MessageStorage.ts";
 
 interface LayoutProps {
   currentView: "loading" | "onboarding" | "chat";
@@ -15,6 +16,7 @@ interface LayoutProps {
   client?: SignalClient | null;
   selectedConversation?: Conversation | null;
   onSelectConversation?: (conversation: Conversation) => void;
+  storage?: MessageStorage;
 }
 
 export default function Layout({ 
@@ -27,6 +29,7 @@ export default function Layout({
   client,
   selectedConversation,
   onSelectConversation,
+  storage,
 }: LayoutProps) {
   // During onboarding, show full-width Onboarding component
   if (currentView === "onboarding" || currentView === "loading") {
@@ -57,6 +60,7 @@ export default function Layout({
         client={client}
         selectedConversation={selectedConversation}
         currentAccount={accounts?.[0]}
+        storage={storage}
       />
     </Box>
   );

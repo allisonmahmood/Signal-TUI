@@ -1,5 +1,6 @@
 import type { Subprocess } from "bun";
 import { EventEmitter } from "events";
+import { appendFileSync } from "node:fs";
 import type {
   JsonRpcRequest,
   JsonRpcResponse,
@@ -255,7 +256,8 @@ export class SignalClient extends EventEmitter {
         const { done, value } = await reader.read();
         if (done) break;
 
-        this.buffer += decoder.decode(value, { stream: true });
+        const chunk = decoder.decode(value, { stream: true });
+        this.buffer += chunk;
         this.processBuffer();
       }
     } catch (error) {
@@ -356,6 +358,22 @@ export class SignalClient extends EventEmitter {
       const wrapped = json as { envelope: SignalEnvelope };
       this.handleEnvelope(wrapped.envelope);
       return;
+    }
+
+    // Handle JSON-RPC notification (method: "receive")
+    // Format: { "jsonrpc": "2.0", "method": "receive", "params": { "envelope": ... } }
+    if (
+      typeof json === "object" && 
+      json !== null && 
+      "method" in json && 
+      (json as any).method === "receive" &&
+      "params" in json
+    ) {
+      const params = (json as any).params;
+      if (params && "envelope" in params) {
+        this.handleEnvelope(params.envelope);
+        return;
+      }
     }
   }
 

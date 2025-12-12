@@ -3,7 +3,10 @@ import { Box, useApp, useInput } from "ink";
 import Layout from "./components/Layout.tsx";
 import { SignalClient } from "../core/SignalClient.ts";
 import type { LinkStatus } from "./components/Onboarding.tsx";
-import type { Account, Conversation } from "../types/types.ts";
+import type { Account, Conversation, SignalEnvelope, ChatMessage } from "../types/types.ts";
+import { appendFileSync } from "node:fs";
+import { MessageStorage } from "../core/MessageStorage.ts";
+import { normalizeNumber } from "../utils/phone.ts";
 
 export type ViewState = "loading" | "onboarding" | "chat";
 
@@ -16,6 +19,8 @@ export default function App() {
   const [client, setClient] = useState<SignalClient | null>(null);
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [selectedConversation, setSelectedConversation] = useState<Conversation | null>(null);
+  const storageRef = useRef<MessageStorage>(new MessageStorage());
+  const [storageReady, setStorageReady] = useState(false);
   
   // Track if we're intentionally stopping (for graceful shutdown)
   const isStoppingRef = useRef(false);
@@ -81,6 +86,10 @@ export default function App() {
 
   // Initialize SignalClient and check for existing accounts
   useEffect(() => {
+    try {
+        appendFileSync("debug.log", `[App] Mounting... storedReady=${storageReady}\n`);
+    } catch(e) {}
+
     const signalClient = new SignalClient({
       requestTimeout: 120000, // 2 minutes for linking timeout
     });
@@ -147,6 +156,57 @@ export default function App() {
       setErrorMessage(error.message);
     });
 
+    // Listen for messages to persist them
+    const handleEnvelope = (envelope: SignalEnvelope) => {
+      // Determine conversation ID
+      let conversationId: string | null = null;
+      let newMessage: ChatMessage | null = null;
+
+      try {
+        appendFileSync("debug.log", `[App] Received envelope: ${JSON.stringify(envelope)}\n`);
+      } catch (e) {}
+
+      if (envelope.dataMessage?.message) {
+        // Incoming Message: Conversation ID is the SENDER
+        conversationId = normalizeNumber(envelope.sourceNumber || envelope.sourceUuid);
+        
+        newMessage = {
+          id: envelope.timestamp.toString(),
+          sender: envelope.sourceNumber || envelope.sourceUuid || "Unknown",
+          senderName: envelope.sourceName,
+          content: envelope.dataMessage.message,
+          timestamp: envelope.timestamp,
+          isOutgoing: false,
+        };
+      } else if (envelope.syncMessage?.sentMessage?.message) {
+        // Outgoing Sync Message: Conversation ID is the DESTINATION
+        conversationId = normalizeNumber(envelope.syncMessage.sentMessage.destinationNumber || 
+                                       envelope.syncMessage.sentMessage.destinationUuid);
+        
+        newMessage = {
+          id: envelope.timestamp.toString(),
+          sender: "Me",
+          content: envelope.syncMessage.sentMessage.message,
+          timestamp: envelope.timestamp,
+          isOutgoing: true,
+        };
+      }
+
+      if (conversationId && newMessage && storageRef.current) {
+         try {
+             appendFileSync("debug.log", `[App] Saving to DB: ${conversationId} ${newMessage.id}\n`);
+         } catch (e) {}
+         storageRef.current.addMessage(newMessage, conversationId);
+      } else {
+         try {
+             appendFileSync("debug.log", `[App] NOT saving: conversationId=${conversationId}, hasMessage=${!!newMessage}, hasStorage=${!!storageRef.current}\n`);
+         } catch (e) {}
+      }
+    };
+
+    signalClient.on("message", handleEnvelope);
+    signalClient.on("sync", handleEnvelope);
+
     // Listen for process close
     signalClient.on("close", (code) => {
       // Ignore close events during intentional shutdown
@@ -156,6 +216,11 @@ export default function App() {
         setLinkStatus("error");
         setErrorMessage(`signal-cli exited with code ${code}`);
       }
+    });
+
+    // Initialize Storage
+    storageRef.current.init().then(() => {
+        setStorageReady(true);
     });
 
     initialize();
@@ -179,6 +244,7 @@ export default function App() {
         client={client}
         selectedConversation={selectedConversation}
         onSelectConversation={setSelectedConversation}
+        storage={storageReady ? storageRef.current : undefined}
       />
     </Box>
   );

@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import { Box, Text, useInput, useStdout } from "ink";
 import { SignalClient } from "../../core/SignalClient.ts";
 import type { Account, Contact, Group, Conversation } from "../../types/types.ts";
+import { normalizeNumber } from "../../utils/phone.ts";
 
 interface SidebarProps {
   currentView: "loading" | "onboarding" | "chat";
@@ -56,7 +57,7 @@ export default function Sidebar({
         contacts.forEach(c => {
           if (c.name || c.profileName) {
             conversationsList.push({
-              id: c.number || c.uuid || "",
+              id: normalizeNumber(c.number) || c.uuid || "",
               number: c.number,
               uuid: c.uuid,
               type: "contact",
