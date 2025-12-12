@@ -13,7 +13,7 @@ A Terminal User Interface (TUI) for Signal, built with [Bun](https://bun.com) an
 1. Clone the repository:
 
    ```bash
-   git clone <repository-url>
+   git clone https://github.com/allisonmahmood/Signal-TUI.git
    cd Signal-TUI
    ```
 
