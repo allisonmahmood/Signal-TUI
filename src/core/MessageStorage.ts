@@ -3,13 +3,15 @@ import { mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { EventEmitter } from "node:events";
 import type { ChatMessage } from "../types/types";
 
-export class MessageStorage {
+export class MessageStorage extends EventEmitter {
   private db: Database;
   private initialized: boolean = false;
 
   constructor() {
+    super();
     // Database path: ~/.signal-tui/db.sqlite
     const dbPath = join(homedir(), ".signal-tui", "db.sqlite");
     
@@ -79,6 +81,8 @@ export class MessageStorage {
       $is_outgoing: msg.isOutgoing ? 1 : 0,
       $status: msg.status || "sent"
     });
+
+    this.emit("new-message", msg, conversationId);
   }
 
   /**

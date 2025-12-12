@@ -43,60 +43,28 @@ export default function ChatArea({
     }
   }, [selectedConversation?.id, storage]);
 
-  // Handle incoming messages
+  // Handle incoming messages from STORAGE (single source of truth)
   useEffect(() => {
-    if (!client || !selectedConversation) return;
+    if (!storage || !selectedConversation) return;
 
-    const handleEnvelope = (envelope: SignalEnvelope) => {
+    const handleNewMessage = (newMessage: ChatMessage, conversationId: string) => {
       // Check if message belongs to current conversation
-      const isRelevant = 
-        // Group message matches group ID
-        (selectedConversation.type === "group" && (
-          envelope.dataMessage?.groupInfo?.groupId === selectedConversation.id ||
-          envelope.syncMessage?.sentMessage?.groupInfo?.groupId === selectedConversation.id
-        )) ||
-        // Direct message/Sync matches number or UUID
-        (selectedConversation.type === "contact" && (
-          // Check incoming match (NORMALIZED)
-          (selectedConversation.number && normalizeNumber(envelope.sourceNumber) === normalizeNumber(selectedConversation.number)) ||
-          (selectedConversation.uuid && envelope.sourceUuid === selectedConversation.uuid) ||
-          // Check sync match (sent to contact) (NORMALIZED)
-          (selectedConversation.number && normalizeNumber(envelope.syncMessage?.sentMessage?.destinationNumber) === normalizeNumber(selectedConversation.number)) ||
-          (selectedConversation.uuid && envelope.syncMessage?.sentMessage?.destinationUuid === selectedConversation.uuid)
-        ));
+      // Since App.tsx now correctly normalizes group IDs, we can just compare IDs
+      const isRelevant = conversationId === selectedConversation.id;
 
-      if (!isRelevant) return;
-
-      const newMessage: ChatMessage | null = envelope.dataMessage?.message ? {
-        id: envelope.timestamp.toString(),
-        sender: envelope.sourceNumber || envelope.sourceUuid || "Unknown",
-        senderName: envelope.sourceName,
-        content: envelope.dataMessage.message,
-        timestamp: envelope.timestamp,
-        isOutgoing: false,
-      } : envelope.syncMessage?.sentMessage?.message ? {
-        id: envelope.timestamp.toString(),
-        sender: "Me",
-        content: envelope.syncMessage.sentMessage.message,
-        timestamp: envelope.timestamp,
-        isOutgoing: true,
-      } : null;
-
-      if (newMessage) {
+      if (isRelevant) {
         setMessages(prev => [...prev, newMessage]);
         // Reset scroll when new message arrives
         setScrollOffset(0);
       }
     };
 
-    client.on("message", handleEnvelope);
-    client.on("sync", handleEnvelope);
+    storage.on("new-message", handleNewMessage);
 
     return () => {
-      client.off("message", handleEnvelope);
-      client.off("sync", handleEnvelope);
+      storage.off("new-message", handleNewMessage);
     };
-  }, [client, selectedConversation]);
+  }, [storage, selectedConversation]);
 
   // Handle keyboard navigation for scrolling
   useInput((input, key) => {
@@ -127,6 +95,7 @@ export default function ChatArea({
         content: text,
         timestamp: Date.now(),
         isOutgoing: true,
+        status: "sent"
       };
       setMessages(prev => [...prev, optimisitcMessage]);
       setScrollOffset(0);

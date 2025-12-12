@@ -209,5 +209,6 @@ export interface ChatMessage {
   content: string;
   timestamp: number;
   isOutgoing: boolean;  // true if sent by us
+  status?: "sent" | "delivered" | "read";
 }
 

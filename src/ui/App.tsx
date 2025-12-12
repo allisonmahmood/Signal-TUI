@@ -167,8 +167,14 @@ export default function App() {
       } catch (e) {}
 
       if (envelope.dataMessage?.message) {
-        // Incoming Message: Conversation ID is the SENDER
-        conversationId = normalizeNumber(envelope.sourceNumber || envelope.sourceUuid);
+        // Incoming Message
+        if (envelope.dataMessage.groupInfo) {
+           // Group Message: Conversation ID is the GROUP ID
+           conversationId = envelope.dataMessage.groupInfo.groupId;
+        } else {
+           // Direct Message: Conversation ID is the SENDER
+           conversationId = normalizeNumber(envelope.sourceNumber || envelope.sourceUuid);
+        }
         
         newMessage = {
           id: envelope.timestamp.toString(),
@@ -179,9 +185,15 @@ export default function App() {
           isOutgoing: false,
         };
       } else if (envelope.syncMessage?.sentMessage?.message) {
-        // Outgoing Sync Message: Conversation ID is the DESTINATION
-        conversationId = normalizeNumber(envelope.syncMessage.sentMessage.destinationNumber || 
-                                       envelope.syncMessage.sentMessage.destinationUuid);
+        // Outgoing Sync Message
+        if (envelope.syncMessage.sentMessage.groupInfo) {
+           // Group Message: Conversation ID is the GROUP ID
+           conversationId = envelope.syncMessage.sentMessage.groupInfo.groupId;
+        } else {
+           // Direct Message: Conversation ID is the DESTINATION
+           conversationId = normalizeNumber(envelope.syncMessage.sentMessage.destinationNumber || 
+                                          envelope.syncMessage.sentMessage.destinationUuid);
+        }
         
         newMessage = {
           id: envelope.timestamp.toString(),
