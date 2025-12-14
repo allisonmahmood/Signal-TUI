@@ -53,18 +53,32 @@ export default function ChatArea({
       const isRelevant = conversationId === selectedConversation.id;
 
       if (isRelevant) {
-        setMessages(prev => [...prev, newMessage]);
+        setMessages(prev => {
+           // Prevent duplicates (especially if synced message arrives after optimistic one)
+           if (prev.some(m => m.id === newMessage.id)) {
+             return prev;
+           }
+           return [...prev, newMessage];
+        });
         // Reset scroll when new message arrives
         setScrollOffset(0);
       }
     };
 
     storage.on("new-message", handleNewMessage);
+    storage.on("message-replaced", handleReplacement);
 
     return () => {
       storage.off("new-message", handleNewMessage);
+      storage.off("message-replaced", handleReplacement);
     };
   }, [storage, selectedConversation]);
+
+  const handleReplacement = (oldId: string, newMessage: ChatMessage) => {
+    setMessages(prev => prev.map(msg => 
+      msg.id === oldId ? newMessage : msg
+    ));
+  };
 
   // Handle keyboard navigation for scrolling
   useInput((input, key) => {
@@ -97,19 +111,27 @@ export default function ChatArea({
         isOutgoing: true,
         status: "sent"
       };
-      setMessages(prev => [...prev, optimisitcMessage]);
-      setScrollOffset(0);
-
       // Persist locally
       if (storage) {
         storage.addMessage(optimisitcMessage, selectedConversation.id);
       }
 
-      await client.sendMessage(
+      const timestamp = await client.sendMessage(
         selectedConversation.id, 
         text, 
         selectedConversation.type === "group"
       );
+
+      // Replace optimistic message with real one
+      const realMessage: ChatMessage = {
+        ...optimisitcMessage,
+        id: timestamp.toString(),
+        timestamp: timestamp
+      };
+
+      if (storage) {
+        storage.replaceMessage(optimisitcMessage.id, realMessage, selectedConversation.id);
+      }
     } catch (error) {
       console.error("Failed to send message:", error);
       // TODO: Show error state

@@ -231,15 +231,17 @@ export class SignalClient extends EventEmitter {
    * @param recipient - Phone number, UUID, or group ID
    * @param message - The message text
    * @param isGroup - Whether this is a group message
+   * @returns Promise that resolves with the message timestamp
    */
-  async sendMessage(recipient: string, message: string, isGroup: boolean = false): Promise<void> {
+  async sendMessage(recipient: string, message: string, isGroup: boolean = false): Promise<number> {
     const params: Record<string, unknown> = { message };
     if (isGroup) {
       params.groupId = recipient;
     } else {
       params.recipient = [recipient];
     }
-    await this.sendRequest("send", params);
+    const response = await this.sendRequest<{ timestamp: number }>("send", params);
+    return response.timestamp;
   }
 
   /**

@@ -10,10 +10,10 @@ export class MessageStorage extends EventEmitter {
   private db: Database;
   private initialized: boolean = false;
 
-  constructor() {
+  constructor(customDbPath?: string) {
     super();
-    // Database path: ~/.signal-tui/db.sqlite
-    const dbPath = join(homedir(), ".signal-tui", "db.sqlite");
+    // Database path: ~/.signal-tui/db.sqlite or custom
+    const dbPath = customDbPath || join(homedir(), ".signal-tui", "db.sqlite");
     
     // Ensure directory exists (sync for constructor, but mkdir is usually fast)
     // We'll do it lazily in init() to be async-safe
@@ -63,6 +63,14 @@ export class MessageStorage extends EventEmitter {
    * Add a message to the database
    */
   addMessage(msg: ChatMessage, conversationId: string): void {
+    this._saveMessage(msg, conversationId);
+    this.emit("new-message", msg, conversationId);
+  }
+
+  /**
+   * Internal helper to save message to DB
+   */
+  private _saveMessage(msg: ChatMessage, conversationId: string): void {
     const query = this.db.query(`
       INSERT OR REPLACE INTO messages (
         id, conversation_id, sender, sender_name, content, timestamp, is_outgoing, status
@@ -81,8 +89,20 @@ export class MessageStorage extends EventEmitter {
       $is_outgoing: msg.isOutgoing ? 1 : 0,
       $status: msg.status || "sent"
     });
+  }
 
-    this.emit("new-message", msg, conversationId);
+  /**
+   * Replace a message with a new one (e.g. optimistic -> confirmed)
+   */
+  replaceMessage(oldId: string, newMessage: ChatMessage, conversationId: string): void {
+    // Delete old message
+    this.db.query("DELETE FROM messages WHERE id = $id").run({ $id: oldId });
+    
+    // Insert new message (without emitting new-message event)
+    this._saveMessage(newMessage, conversationId);
+    
+    // Emit replacement event
+    this.emit("message-replaced", oldId, newMessage);
   }
 
   /**
