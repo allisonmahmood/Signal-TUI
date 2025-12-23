@@ -7,17 +7,14 @@ import { EventEmitter } from "node:events";
 import type { ChatMessage } from "../types/types";
 
 export class MessageStorage extends EventEmitter {
-  private db: Database;
+  private db?: Database;
   private initialized: boolean = false;
+  private dbPath: string;
 
   constructor(customDbPath?: string) {
     super();
     // Database path: ~/.signal-tui/db.sqlite or custom
-    const dbPath = customDbPath || join(homedir(), ".signal-tui", "db.sqlite");
-    
-    // Ensure directory exists (sync for constructor, but mkdir is usually fast)
-    // We'll do it lazily in init() to be async-safe
-    this.db = new Database(dbPath, { create: true });
+    this.dbPath = customDbPath || join(homedir(), ".signal-tui", "db.sqlite");
   }
 
   /**
@@ -27,11 +24,14 @@ export class MessageStorage extends EventEmitter {
     if (this.initialized) return;
 
     // Ensure directory exists
-    const dbDir = dirname(this.db.filename);
+    const dbDir = dirname(this.dbPath);
     await mkdir(dbDir, { recursive: true });
 
+    // Create database
+    this.db = new Database(this.dbPath, { create: true });
+
     // Create tables
-      this.db.query(`
+      this.db!.query(`
         CREATE TABLE IF NOT EXISTS messages (
           id TEXT PRIMARY KEY,
           conversation_id TEXT NOT NULL,
@@ -46,12 +46,12 @@ export class MessageStorage extends EventEmitter {
       
       // Auto-migrate: Try to add status column if it doesn't exist
       try {
-        this.db.query("ALTER TABLE messages ADD COLUMN status TEXT DEFAULT 'sent'").run();
+        this.db!.query("ALTER TABLE messages ADD COLUMN status TEXT DEFAULT 'sent'").run();
       } catch (e) {
         // Ignore error if column likely exists
       }
 
-      this.db.query(`
+      this.db!.query(`
       CREATE INDEX IF NOT EXISTS idx_conversation_timestamp 
       ON messages(conversation_id, timestamp);
     `);
@@ -63,6 +63,7 @@ export class MessageStorage extends EventEmitter {
    * Add a message to the database
    */
   addMessage(msg: ChatMessage, conversationId: string): void {
+    if (!this.db) throw new Error("Database not initialized. Call init() first.");
     this._saveMessage(msg, conversationId);
     this.emit("new-message", msg, conversationId);
   }
@@ -71,7 +72,7 @@ export class MessageStorage extends EventEmitter {
    * Internal helper to save message to DB
    */
   private _saveMessage(msg: ChatMessage, conversationId: string): void {
-    const query = this.db.query(`
+    const query = this.db!.query(`
       INSERT OR REPLACE INTO messages (
         id, conversation_id, sender, sender_name, content, timestamp, is_outgoing, status
       ) VALUES (
@@ -95,8 +96,9 @@ export class MessageStorage extends EventEmitter {
    * Replace a message with a new one (e.g. optimistic -> confirmed)
    */
   replaceMessage(oldId: string, newMessage: ChatMessage, conversationId: string): void {
+    if (!this.db) throw new Error("Database not initialized. Call init() first.");
     // Delete old message
-    this.db.query("DELETE FROM messages WHERE id = $id").run({ $id: oldId });
+    this.db!.query("DELETE FROM messages WHERE id = $id").run({ $id: oldId });
     
     // Insert new message (without emitting new-message event)
     this._saveMessage(newMessage, conversationId);
@@ -109,6 +111,7 @@ export class MessageStorage extends EventEmitter {
    * Get recent messages for a conversation
    */
   getMessages(conversationId: string, limit: number = 50, beforeTimestamp?: number): ChatMessage[] {
+    if (!this.db) throw new Error("Database not initialized. Call init() first.");
     let sql = `
       SELECT * FROM messages 
       WHERE conversation_id = $conversation_id
@@ -126,7 +129,7 @@ export class MessageStorage extends EventEmitter {
 
     sql += ` ORDER BY timestamp DESC LIMIT $limit`;
 
-    const query = this.db.query(sql);
+    const query = this.db!.query(sql);
     const rows = query.all(params) as any[];
 
     // Convert back to ChatMessage objects and reverse (so oldest is first)
@@ -142,7 +145,8 @@ export class MessageStorage extends EventEmitter {
   }
 
   updateMessageStatus(timestamp: number, status: "sent" | "delivered" | "read"): void {
-    const query = this.db.query(`
+    if (!this.db) throw new Error("Database not initialized. Call init() first.");
+    const query = this.db!.query(`
       UPDATE messages 
       SET status = $status 
       WHERE timestamp = $timestamp AND is_outgoing = 1
@@ -155,7 +159,8 @@ export class MessageStorage extends EventEmitter {
   }
 
   getConversationLastMessage(conversationId: string): { timestamp: number; content: string } | null {
-    const query = this.db.query(`
+    if (!this.db) throw new Error("Database not initialized. Call init() first.");
+    const query = this.db!.query(`
       SELECT timestamp, content 
       FROM messages 
       WHERE conversation_id = $conversation_id
@@ -173,7 +178,8 @@ export class MessageStorage extends EventEmitter {
   }
 
   getAllConversationMetadata(): Map<string, { timestamp: number; content: string }> {
-    const query = this.db.query(`
+    if (!this.db) throw new Error("Database not initialized. Call init() first.");
+    const query = this.db!.query(`
       SELECT 
         conversation_id,
         MAX(timestamp) as timestamp,
@@ -201,6 +207,6 @@ export class MessageStorage extends EventEmitter {
    * Close the database connection
    */
   close(): void {
-    this.db.close();
+    if (this.db) this.db.close();
   }
 }
