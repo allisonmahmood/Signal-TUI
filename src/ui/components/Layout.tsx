@@ -47,13 +47,14 @@ export default function Layout({
   // Normal chat layout with sidebar
   return (
     <Box flexDirection="row" width="100%" height="100%">
-      <Sidebar 
-        currentView={currentView} 
+      <Sidebar
+        currentView={currentView}
         accounts={accounts}
         onLinkNewDevice={onLinkNewDevice}
         client={client}
         selectedConversation={selectedConversation}
         onSelectConversation={onSelectConversation}
+        storage={storage}
       />
       <ChatArea 
         currentView={currentView} 

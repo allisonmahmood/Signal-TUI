@@ -147,11 +147,55 @@ export class MessageStorage extends EventEmitter {
       SET status = $status 
       WHERE timestamp = $timestamp AND is_outgoing = 1
     `);
-    
+
     query.run({
       $status: status,
       $timestamp: timestamp
     });
+  }
+
+  getConversationLastMessage(conversationId: string): { timestamp: number; content: string } | null {
+    const query = this.db.query(`
+      SELECT timestamp, content 
+      FROM messages 
+      WHERE conversation_id = $conversation_id
+      ORDER BY timestamp DESC 
+      LIMIT 1
+    `);
+
+    const result = query.get({ $conversation_id: conversationId }) as any;
+    if (!result) return null;
+
+    return {
+      timestamp: result.timestamp,
+      content: result.content
+    };
+  }
+
+  getAllConversationMetadata(): Map<string, { timestamp: number; content: string }> {
+    const query = this.db.query(`
+      SELECT 
+        conversation_id,
+        MAX(timestamp) as timestamp,
+        (SELECT content FROM messages m2 
+         WHERE m2.conversation_id = messages.conversation_id 
+         ORDER BY m2.timestamp DESC 
+         LIMIT 1) as content
+      FROM messages
+      GROUP BY conversation_id
+    `);
+
+    const rows = query.all() as any[];
+    const metadata = new Map<string, { timestamp: number; content: string }>();
+
+    for (const row of rows) {
+      metadata.set(row.conversation_id, {
+        timestamp: row.timestamp,
+        content: row.content || ""
+      });
+    }
+
+    return metadata;
   }
   /**
    * Close the database connection

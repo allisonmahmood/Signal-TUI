@@ -1,8 +1,10 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { Box, Text, useInput, useStdout } from "ink";
 import { SignalClient } from "../../core/SignalClient.ts";
 import type { Account, Contact, Group, Conversation } from "../../types/types.ts";
+import type { MessageStorage } from "../../core/MessageStorage.ts";
 import { normalizeNumber } from "../../utils/phone.ts";
+import { sortByRecency } from "../../utils/sortByRecency.ts";
 
 interface SidebarProps {
   currentView: "loading" | "onboarding" | "chat";
@@ -11,21 +13,24 @@ interface SidebarProps {
   client?: SignalClient | null;
   selectedConversation?: Conversation | null;
   onSelectConversation?: (conversation: Conversation) => void;
+  storage?: MessageStorage;
 }
 
-export default function Sidebar({ 
-  currentView, 
-  accounts, 
+export default function Sidebar({
+  currentView,
+  accounts,
   onLinkNewDevice,
   client,
   selectedConversation,
-  onSelectConversation 
+  onSelectConversation,
+  storage
 }: SidebarProps) {
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [scrollOffset, setScrollOffset] = useState(0);
   const { stdout } = useStdout();
-  
+  const conversationsRef = useRef<Conversation[]>([]);
+
   const hasAccounts = accounts && accounts.length > 0;
   const primaryAccount = accounts?.[0];
 
@@ -37,41 +42,86 @@ export default function Sidebar({
 
   // Fetch contacts and groups
   useEffect(() => {
-    if (client && currentView === "chat") {
+    if (client && currentView === "chat" && storage) {
       Promise.all([
         client.listContacts(),
-        client.listGroups()
-      ]).then(([contacts, groups]) => {
+        client.listGroups(),
+        storage.getAllConversationMetadata()
+      ]).then(([contacts, groups, metadata]) => {
         const conversationsList: Conversation[] = [];
 
-        // Add groups
         groups.forEach(g => {
+          const meta = metadata.get(g.id);
           conversationsList.push({
             id: g.id,
             type: "group",
             displayName: g.name || "Unknown Group",
+            lastMessageTime: meta?.timestamp || 0,
+            lastMessage: meta?.content
           });
         });
 
-        // Add contacts (only those with names or profiles)
         contacts.forEach(c => {
           if (c.name || c.profileName) {
+            const id = normalizeNumber(c.number) || c.uuid || "";
+            const meta = metadata.get(id);
             conversationsList.push({
-              id: normalizeNumber(c.number) || c.uuid || "",
+              id,
               number: c.number,
               uuid: c.uuid,
               type: "contact",
               displayName: c.name || c.profileName || c.number || "Unknown Contact",
+              lastMessageTime: meta?.timestamp || 0,
+              lastMessage: meta?.content
             });
           }
         });
 
-        // Sort by name for now (later by timestamp)
-        conversationsList.sort((a, b) => a.displayName.localeCompare(b.displayName));
-        setConversations(conversationsList);
+        const sorted = sortByRecency(conversationsList);
+        setConversations(sorted);
+        conversationsRef.current = sorted;
       });
     }
-  }, [client, currentView]);
+  }, [client, currentView, storage]);
+
+  useEffect(() => {
+    if (!storage || currentView !== "chat") return;
+
+    const handleNewMessage = (newMessage: any, conversationId: string) => {
+      setConversations(prev => {
+        const updated = prev.map(conv => {
+          if (conv.id === conversationId) {
+            return {
+              ...conv,
+              lastMessageTime: newMessage.timestamp,
+              lastMessage: newMessage.content
+            };
+          }
+          return conv;
+        });
+
+        const wasSelected = selectedConversation?.id === conversationId;
+        const sorted = sortByRecency(updated);
+
+        if (wasSelected) {
+          const newIndex = sorted.findIndex(c => c.id === conversationId);
+          if (newIndex >= 0 && newIndex < listHeight) {
+            setScrollOffset(0);
+          }
+          setSelectedIndex(newIndex >= 0 ? newIndex : 0);
+        }
+
+        conversationsRef.current = sorted;
+        return sorted;
+      });
+    };
+
+    storage.on("new-message", handleNewMessage);
+
+    return () => {
+      storage.off("new-message", handleNewMessage);
+    };
+  }, [storage, currentView, selectedConversation, listHeight]);
 
   // Handle keyboard navigation
   useInput((input, key) => {
