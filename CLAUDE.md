@@ -1,111 +1,65 @@
----
-description: Use Bun instead of Node.js, npm, pnpm, or vite.
-globs: "*.ts, *.tsx, *.html, *.css, *.js, *.jsx, package.json"
-alwaysApply: false
----
+# CLAUDE.md
 
-Default to using Bun instead of Node.js.
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-- Use `bun <file>` instead of `node <file>` or `ts-node <file>`
-- Use `bun test` instead of `jest` or `vitest`
-- Use `bun build <file.html|file.ts|file.css>` instead of `webpack` or `esbuild`
-- Use `bun install` instead of `npm install` or `yarn install` or `pnpm install`
-- Use `bun run <script>` instead of `npm run <script>` or `yarn run <script>` or `pnpm run <script>`
-- Bun automatically loads .env, so don't use dotenv.
+## Project Overview
 
-## APIs
+Signal-TUI is a Terminal User Interface for Signal Messenger, built with Bun, React, and Ink. It communicates with signal-cli via JSON-RPC over stdin/stdout.
 
-- `Bun.serve()` supports WebSockets, HTTPS, and routes. Don't use `express`.
-- `bun:sqlite` for SQLite. Don't use `better-sqlite3`.
-- `Bun.redis` for Redis. Don't use `ioredis`.
-- `Bun.sql` for Postgres. Don't use `pg` or `postgres.js`.
-- `WebSocket` is built-in. Don't use `ws`.
-- Prefer `Bun.file` over `node:fs`'s readFile/writeFile
-- Bun.$`ls` instead of execa.
+## Commands
 
-## Testing
-
-Use `bun test` to run tests.
-
-```ts#index.test.ts
-import { test, expect } from "bun:test";
-
-test("hello world", () => {
-  expect(1).toBe(1);
-});
+```bash
+bun start                                    # Start the TUI application
+bun run src/ui/index.tsx                     # Alternative: run directly
+bun test                                     # Run all tests
+bun test src/core/MessageStorage.test.ts    # Run a single test file
+bun install                                  # Install dependencies
 ```
 
-## Frontend
+## Architecture
 
-Use HTML imports with `Bun.serve()`. Don't use `vite`. HTML imports fully support React, CSS, Tailwind.
-
-Server:
-
-```ts#index.ts
-import index from "./index.html"
-
-Bun.serve({
-  routes: {
-    "/": index,
-    "/api/users/:id": {
-      GET: (req) => {
-        return new Response(JSON.stringify({ id: req.params.id }));
-      },
-    },
-  },
-  // optional websocket support
-  websocket: {
-    open: (ws) => {
-      ws.send("Hello, world!");
-    },
-    message: (ws, message) => {
-      ws.send(message);
-    },
-    close: (ws) => {
-      // handle close
-    }
-  },
-  development: {
-    hmr: true,
-    console: true,
-  }
-})
+```
+src/
+├── core/                    # Core business logic
+│   ├── SignalClient.ts      # JSON-RPC wrapper around signal-cli (spawns process, handles requests/events)
+│   ├── MessageStorage.ts    # SQLite message persistence with EventEmitter for real-time updates
+│   └── Config.ts            # Configuration management with auto-detection
+├── ui/                      # React/Ink TUI components
+│   ├── index.tsx            # Entry point
+│   ├── App.tsx              # Main app: initializes client/storage, manages app state (loading→onboarding→chat)
+│   └── components/
+│       ├── Sidebar.tsx      # Conversation list with recency sorting and keyboard navigation
+│       ├── ChatArea.tsx     # Message display with optimistic sending and history pagination
+│       └── Onboarding.tsx   # Device linking with QR code display
+├── types/types.ts           # All TypeScript type definitions
+└── utils/                   # Phone normalization, conversation sorting
 ```
 
-HTML files can import .tsx, .jsx or .js files directly and Bun's bundler will transpile & bundle automatically. `<link>` tags can point to stylesheets and Bun's CSS bundler will bundle.
+**Key data flow:** signal-cli JSON-RPC → SignalClient events → App.tsx → MessageStorage (SQLite + event emission) → UI components listen to storage events
 
-```html#index.html
-<html>
-  <body>
-    <h1>Hello, world!</h1>
-    <script type="module" src="./frontend.tsx"></script>
-  </body>
-</html>
-```
+## Bun Runtime
 
-With the following `frontend.tsx`:
+Default to Bun instead of Node.js:
+- `bun <file>` instead of `node` or `ts-node`
+- `bun:sqlite` for SQLite (not better-sqlite3)
+- `Bun.spawn()` for subprocesses
+- `Bun.file` instead of `node:fs` readFile/writeFile
+- Bun automatically loads `.env`, never use dotenv
 
-```tsx#frontend.tsx
-import React from "react";
+## Code Style
 
-// import .css files directly and it works
-import './index.css';
+**Imports:** Use `node:` prefix for builtins, include file extensions (e.g., `import { foo } from "./bar.ts"`)
 
-import { createRoot } from "react-dom/client";
+**Naming:** PascalCase for classes/components, camelCase for functions/variables, `_prefix` for private methods
 
-const root = createRoot(document.body);
+**React/Ink:** Functional components with hooks only, React 19 (no `import React` needed)
 
-export default function Frontend() {
-  return <h1>Hello, world!</h1>;
-}
+**Testing:** Use `bun:test`, files named `*.test.ts` next to source, clean up test databases in `afterAll`
 
-root.render(<Frontend />);
-```
+**Database:** Parameterized queries with `$param` syntax, prepared statements with `query().run()`
 
-Then, run index.ts
+## Configuration
 
-```sh
-bun --hot ./index.ts
-```
-
-For more information, read the Bun API docs in `node_modules/bun-types/docs/**.md`.
+- Config file: `~/.signal-tui/config.json`
+- Database: `~/.signal-tui/db.sqlite`
+- signal-cli path detection: config file → `SIGNAL_CLI_PATH` env → common paths (`/usr/bin/signal-cli`, etc.)
