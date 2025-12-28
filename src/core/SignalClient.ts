@@ -14,7 +14,6 @@ import type {
   Group,
 } from "../types/types";
 
-const DEFAULT_SIGNAL_CLI_PATH = "/opt/homebrew/bin/signal-cli";
 const DEFAULT_REQUEST_TIMEOUT = 30000; // 30 seconds
 
 interface PendingRequest {
@@ -55,7 +54,7 @@ export class SignalClient extends EventEmitter {
 
   constructor(options: SignalClientOptions = {}) {
     super();
-    this.signalCliPath = options.signalCliPath ?? DEFAULT_SIGNAL_CLI_PATH;
+    this.signalCliPath = options.signalCliPath ?? "signal-cli";
     this.requestTimeout = options.requestTimeout ?? DEFAULT_REQUEST_TIMEOUT;
     this.account = options.account;
   }
