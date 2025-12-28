@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from "react";
 import { Box, useApp, useInput } from "ink";
 import Layout from "./components/Layout.tsx";
 import { SignalClient } from "../core/SignalClient.ts";
+import { findSignalCliPath, getConfigInstructions } from "../core/Config.ts";
 import type { LinkStatus } from "./components/Onboarding.tsx";
 import type { Account, Conversation, SignalEnvelope, ChatMessage } from "../types/types.ts";
 import { appendFileSync } from "node:fs";
@@ -90,7 +91,17 @@ export default function App() {
         appendFileSync("debug.log", `[App] Mounting... storedReady=${storageReady}\n`);
     } catch(e) {}
 
+    // Find signal-cli path
+    const signalCliPath = findSignalCliPath();
+    if (!signalCliPath) {
+      setCurrentView("onboarding");
+      setLinkStatus("error");
+      setErrorMessage(getConfigInstructions());
+      return;
+    }
+
     const signalClient = new SignalClient({
+      signalCliPath,
       requestTimeout: 120000, // 2 minutes for linking timeout
     });
 
