@@ -1,15 +1,21 @@
-import { useState, useEffect, useRef } from "react";
-import { Box, useApp, useInput } from "ink";
+import { useState, useEffect, useRef, useCallback } from "react";
+import { useApp, useInput } from "ink";
 import Layout from "./components/Layout.tsx";
 import { SignalClient } from "../core/SignalClient.ts";
 import { findSignalCliPath, getConfigInstructions } from "../core/Config.ts";
 import type { LinkStatus } from "./components/Onboarding.tsx";
 import type { Account, Conversation, SignalEnvelope, ChatMessage } from "../types/types.ts";
-import { appendFileSync } from "node:fs";
 import { MessageStorage } from "../core/MessageStorage.ts";
 import { normalizeNumber } from "../utils/phone.ts";
 
+// Async debug logging - only active when DEBUG=true
+const DEBUG = process.env.DEBUG === "true";
+const debugLog = DEBUG
+  ? (msg: string) => Bun.write(Bun.file("debug.log"), msg + "\n")
+  : () => {};
+
 export type ViewState = "loading" | "onboarding" | "chat";
+export type FocusArea = "sidebar" | "chat" | "input";
 
 export default function App() {
   const { exit } = useApp();
@@ -22,27 +28,39 @@ export default function App() {
   const [selectedConversation, setSelectedConversation] = useState<Conversation | null>(null);
   const storageRef = useRef<MessageStorage>(new MessageStorage());
   const [storageReady, setStorageReady] = useState(false);
-  
+  const [focusArea, setFocusArea] = useState<FocusArea>("sidebar");
+
   // Track if we're intentionally stopping (for graceful shutdown)
   const isStoppingRef = useRef(false);
 
-  // Handle keyboard input for linking new device and Global Shortcuts
+  // Cycle focus to next area
+  const cycleFocus = useCallback(() => {
+    setFocusArea(prev => {
+      if (prev === "sidebar") return "chat";
+      if (prev === "chat") return "input";
+      return "sidebar";
+    });
+  }, []);
+
+  // Handle keyboard input for global shortcuts - disabled when typing
   useInput((input, key) => {
-    // Ctrl+C Graceful Exit
-    if (key.ctrl && input.toLowerCase() === "c") {
-        isStoppingRef.current = true;
-        if (client) {
-            client.stop();
-        }
-        exit();
-        return;
+    // Tab to cycle focus: sidebar -> chat -> input -> sidebar
+    if (key.tab && currentView === "chat") {
+      cycleFocus();
+      return;
     }
 
+    // Ctrl+L to link a new device
     if (currentView === "chat" && input.toLowerCase() === "l" && key.ctrl) {
-      // Ctrl+L to link a new device
       startLinkingProcess();
     }
-  });
+  }, { isActive: focusArea !== "input" });
+
+  // Memoized callback for selecting a conversation - auto-focuses input
+  const handleSelectConversation = useCallback((conv: Conversation) => {
+    setSelectedConversation(conv);
+    setFocusArea("input");
+  }, []);
 
   const startLinkingProcess = async () => {
     if (!client) return;
@@ -77,7 +95,7 @@ export default function App() {
       // Ignore errors if we're intentionally stopping
       if (isStoppingRef.current) return;
       
-      console.error("Linking error:", error);
+      debugLog(`[App] Linking error: ${error}`);
       setLinkStatus("error");
       setErrorMessage(
         error instanceof Error ? error.message : "Unknown error occurred"
@@ -87,9 +105,7 @@ export default function App() {
 
   // Initialize SignalClient and check for existing accounts
   useEffect(() => {
-    try {
-        appendFileSync("debug.log", `[App] Mounting... storedReady=${storageReady}\n`);
-    } catch(e) {}
+    debugLog(`[App] Mounting... storedReady=${storageReady}`);
 
     // Find signal-cli path
     const signalCliPath = findSignalCliPath();
@@ -149,7 +165,7 @@ export default function App() {
         // Ignore errors if we're intentionally stopping
         if (isStoppingRef.current) return;
         
-        console.error("Initialization error:", error);
+        debugLog(`[App] Initialization error: ${error}`);
         setLinkStatus("error");
         setErrorMessage(
           error instanceof Error ? error.message : "Unknown error occurred"
@@ -162,7 +178,7 @@ export default function App() {
       // Ignore errors during shutdown
       if (isStoppingRef.current) return;
       
-      console.error("SignalClient error:", error);
+      debugLog(`[App] SignalClient error: ${error.message}`);
       setLinkStatus("error");
       setErrorMessage(error.message);
     });
@@ -173,9 +189,7 @@ export default function App() {
       let conversationId: string | null = null;
       let newMessage: ChatMessage | null = null;
 
-      try {
-        appendFileSync("debug.log", `[App] Received envelope: ${JSON.stringify(envelope)}\n`);
-      } catch (e) {}
+      debugLog(`[App] Received envelope: ${JSON.stringify(envelope)}`);
 
       if (envelope.dataMessage?.message) {
         // Incoming Message
@@ -216,14 +230,10 @@ export default function App() {
       }
 
       if (conversationId && newMessage && storageRef.current) {
-         try {
-             appendFileSync("debug.log", `[App] Saving to DB: ${conversationId} ${newMessage.id}\n`);
-         } catch (e) {}
+         debugLog(`[App] Saving to DB: ${conversationId} ${newMessage.id}`);
          storageRef.current.addMessage(newMessage, conversationId);
       } else {
-         try {
-             appendFileSync("debug.log", `[App] NOT saving: conversationId=${conversationId}, hasMessage=${!!newMessage}, hasStorage=${!!storageRef.current}\n`);
-         } catch (e) {}
+         debugLog(`[App] NOT saving: conversationId=${conversationId}, hasMessage=${!!newMessage}, hasStorage=${!!storageRef.current}`);
       }
     };
 
@@ -256,19 +266,20 @@ export default function App() {
   }, []);
 
   return (
-    <Box flexDirection="column" width="100%" height="100%">
-      <Layout
-        currentView={currentView}
-        linkUri={linkUri}
-        linkStatus={linkStatus}
-        errorMessage={errorMessage}
-        accounts={accounts}
-        onLinkNewDevice={startLinkingProcess}
-        client={client}
-        selectedConversation={selectedConversation}
-        onSelectConversation={setSelectedConversation}
-        storage={storageReady ? storageRef.current : undefined}
-      />
-    </Box>
+    <Layout
+      currentView={currentView}
+      linkUri={linkUri}
+      linkStatus={linkStatus}
+      errorMessage={errorMessage}
+      accounts={accounts}
+      onLinkNewDevice={startLinkingProcess}
+      client={client}
+      selectedConversation={selectedConversation}
+      onSelectConversation={handleSelectConversation}
+      storage={storageReady ? storageRef.current : undefined}
+      focusArea={focusArea}
+      setFocusArea={setFocusArea}
+      cycleFocus={cycleFocus}
+    />
   );
 }

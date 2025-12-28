@@ -1,10 +1,11 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, memo, useMemo } from "react";
 import { Box, Text, useInput, useStdout } from "ink";
 import { SignalClient } from "../../core/SignalClient.ts";
 import type { Account, Contact, Group, Conversation } from "../../types/types.ts";
 import type { MessageStorage } from "../../core/MessageStorage.ts";
 import { normalizeNumber } from "../../utils/phone.ts";
 import { sortByRecency } from "../../utils/sortByRecency.ts";
+import type { FocusArea } from "../App.tsx";
 
 interface SidebarProps {
   currentView: "loading" | "onboarding" | "chat";
@@ -14,22 +15,32 @@ interface SidebarProps {
   selectedConversation?: Conversation | null;
   onSelectConversation?: (conversation: Conversation) => void;
   storage?: MessageStorage;
+  focusArea?: FocusArea;
+  setFocusArea?: (area: FocusArea) => void;
 }
 
-export default function Sidebar({
+function Sidebar({
   currentView,
   accounts,
   onLinkNewDevice,
   client,
   selectedConversation,
   onSelectConversation,
-  storage
+  storage,
+  focusArea,
+  setFocusArea,
 }: SidebarProps) {
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [scrollOffset, setScrollOffset] = useState(0);
   const { stdout } = useStdout();
   const conversationsRef = useRef<Conversation[]>([]);
+  const selectedConversationIdRef = useRef<string | null>(null);
+
+  // Keep ref in sync with selectedConversation
+  useEffect(() => {
+    selectedConversationIdRef.current = selectedConversation?.id ?? null;
+  }, [selectedConversation?.id]);
 
   const hasAccounts = accounts && accounts.length > 0;
   const primaryAccount = accounts?.[0];
@@ -89,26 +100,34 @@ export default function Sidebar({
 
     const handleNewMessage = (newMessage: any, conversationId: string) => {
       setConversations(prev => {
-        const updated = prev.map(conv => {
-          if (conv.id === conversationId) {
-            return {
-              ...conv,
-              lastMessageTime: newMessage.timestamp,
-              lastMessage: newMessage.content
-            };
-          }
-          return conv;
-        });
+        // Find the conversation
+        const existing = prev.find(c => c.id === conversationId);
+        if (!existing) return prev;
 
-        const wasSelected = selectedConversation?.id === conversationId;
-        const sorted = sortByRecency(updated);
+        const convIndex = prev.indexOf(existing);
+        const updatedConv: Conversation = {
+          id: existing.id,
+          type: existing.type,
+          displayName: existing.displayName,
+          number: existing.number,
+          uuid: existing.uuid,
+          lastMessageTime: newMessage.timestamp,
+          lastMessage: newMessage.content
+        };
+
+        // Move to top instead of full re-sort (new messages are most recent)
+        const withoutConv = prev.filter((_, i) => i !== convIndex);
+        const sorted: Conversation[] = [updatedConv, ...withoutConv];
+
+        // Use ref instead of prop to avoid dependency array issues
+        const wasSelected = selectedConversationIdRef.current === conversationId;
 
         if (wasSelected) {
-          const newIndex = sorted.findIndex(c => c.id === conversationId);
-          if (newIndex >= 0 && newIndex < listHeight) {
+          // Conversation moved to top, so index is now 0
+          if (listHeight > 0) {
             setScrollOffset(0);
           }
-          setSelectedIndex(newIndex >= 0 ? newIndex : 0);
+          setSelectedIndex(0);
         }
 
         conversationsRef.current = sorted;
@@ -121,9 +140,9 @@ export default function Sidebar({
     return () => {
       storage.off("new-message", handleNewMessage);
     };
-  }, [storage, currentView, selectedConversation, listHeight]);
+  }, [storage, currentView, listHeight]);
 
-  // Handle keyboard navigation
+  // Handle keyboard navigation - only active when sidebar is focused
   useInput((input, key) => {
     if (currentView !== "chat") return;
 
@@ -154,15 +173,20 @@ export default function Sidebar({
         onSelectConversation(conversations[selectedIndex]);
       }
     }
-  });
+  }, { isActive: focusArea === "sidebar" });
 
-  // Calculate visible conversations
-  const visibleConversations = conversations.slice(scrollOffset, scrollOffset + listHeight);
+  // Calculate visible conversations (memoized)
+  const visibleConversations = useMemo(
+    () => conversations.slice(scrollOffset, scrollOffset + listHeight),
+    [conversations, scrollOffset, listHeight]
+  );
 
   return (
     <Box
       flexDirection="column"
       width="30%"
+      height="100%"
+      overflow="hidden"
       borderStyle="round"
       borderColor="gray"
       paddingX={1}
@@ -242,3 +266,5 @@ export default function Sidebar({
     </Box>
   );
 }
+
+export default memo(Sidebar);
