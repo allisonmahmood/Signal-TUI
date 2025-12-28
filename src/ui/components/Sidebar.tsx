@@ -188,7 +188,7 @@ function Sidebar({
       height="100%"
       overflow="hidden"
       borderStyle="round"
-      borderColor="gray"
+      borderColor={focusArea === "sidebar" ? "cyan" : "gray"}
       paddingX={1}
     >
       {/* Header */}
