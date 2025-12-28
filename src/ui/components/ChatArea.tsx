@@ -1,10 +1,11 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, memo, useMemo, useCallback } from "react";
 import { Box, Text, useInput, useStdout } from "ink";
 import { SignalClient } from "../../core/SignalClient.ts";
 import type { Conversation, Account, ChatMessage, SignalEnvelope } from "../../types/types.ts";
 import { MessageStorage } from "../../core/MessageStorage.ts";
 import { normalizeNumber } from "../../utils/phone.ts";
 import MessageInput from "./MessageInput.tsx";
+import type { FocusArea } from "../App.tsx";
 
 interface ChatAreaProps {
   currentView: "loading" | "onboarding" | "chat";
@@ -12,14 +13,20 @@ interface ChatAreaProps {
   selectedConversation?: Conversation | null;
   currentAccount?: Account | null;
   storage?: MessageStorage;
+  focusArea?: FocusArea;
+  setFocusArea?: (area: FocusArea) => void;
+  cycleFocus?: () => void;
 }
 
-export default function ChatArea({ 
-  currentView, 
-  client, 
+function ChatArea({
+  currentView,
+  client,
   selectedConversation,
   currentAccount,
-  storage
+  storage,
+  focusArea,
+  setFocusArea,
+  cycleFocus,
 }: ChatAreaProps) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [scrollOffset, setScrollOffset] = useState(0);
@@ -80,10 +87,10 @@ export default function ChatArea({
     ));
   };
 
-  // Handle keyboard navigation for scrolling
+  // Handle keyboard navigation for scrolling - only active when chat area is focused
   useInput((input, key) => {
     if (currentView !== "chat") return;
-    
+
     // PageUp to see older messages (increase offset)
     if (key.pageUp) {
       setScrollOffset(prev => {
@@ -96,9 +103,9 @@ export default function ChatArea({
     if (key.pageDown) {
       setScrollOffset(prev => Math.max(0, prev - 5));
     }
-  });
+  }, { isActive: focusArea === "chat" });
 
-  const handleSendMessage = async (text: string) => {
+  const handleSendMessage = useCallback(async (text: string) => {
     if (!client || !selectedConversation) return;
 
     try {
@@ -117,8 +124,8 @@ export default function ChatArea({
       }
 
       const timestamp = await client.sendMessage(
-        selectedConversation.id, 
-        text, 
+        selectedConversation.id,
+        text,
         selectedConversation.type === "group"
       );
 
@@ -133,10 +140,10 @@ export default function ChatArea({
         storage.replaceMessage(optimisitcMessage.id, realMessage, selectedConversation.id);
       }
     } catch (error) {
-      console.error("Failed to send message:", error);
-      // TODO: Show error state
+      // TODO: Show error state to user
+      // Silently fail for now to avoid interfering with Ink's terminal output
     }
-  };
+  }, [client, selectedConversation, storage]);
 
   const getHeader = () => {
     switch (currentView) {
@@ -246,6 +253,8 @@ export default function ChatArea({
     <Box
       flexDirection="column"
       width="70%"
+      height="100%"
+      overflow="hidden"
       borderStyle="round"
       borderColor="gray"
       paddingX={1}
@@ -263,9 +272,11 @@ export default function ChatArea({
       {/* Input area */}
       {currentView === "chat" && selectedConversation && (
         <Box marginTop={1}>
-          <MessageInput onSend={handleSendMessage} />
+          <MessageInput onSend={handleSendMessage} focus={focusArea === "input"} onEscape={cycleFocus} />
         </Box>
       )}
     </Box>
   );
 }
+
+export default memo(ChatArea);
