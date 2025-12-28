@@ -7,6 +7,19 @@ import { normalizeNumber } from "../../utils/phone.ts";
 import MessageInput from "./MessageInput.tsx";
 import type { FocusArea } from "../App.tsx";
 
+// Estimate how many terminal rows a message will take
+function estimateMessageHeight(content: string, availableWidth: number): number {
+  // Base: 2 (borders) + 1 (header row) = 3 rows minimum
+  const BASE_HEIGHT = 3;
+
+  // Estimate content lines based on character count and width
+  // Message box is 80% of chat area, minus padding and borders (~8 chars)
+  const contentWidth = Math.max(20, availableWidth - 8);
+  const contentLines = Math.max(1, Math.ceil(content.length / contentWidth));
+
+  return BASE_HEIGHT + contentLines;
+}
+
 interface ChatAreaProps {
   currentView: "loading" | "onboarding" | "chat";
   client?: SignalClient | null;
@@ -31,12 +44,40 @@ function ChatArea({
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [scrollOffset, setScrollOffset] = useState(0);
   const { stdout } = useStdout();
-  
-  // Calculate available window size for messages
-  // Total rows - Header(3) - Input(3) - Footer/Border(2) = ~8 rows overhead.
-  // Increasing safety margin to 10 to ensure fit.
-  // Minimum 5 rows to avoid issues
-  const windowSize = Math.max(5, (stdout?.rows || 24) - 10);
+
+  // Calculate available space for messages
+  // Total rows - Header(~2) - Input(~2) - borders/margins(~6) = ~10 overhead
+  const availableRows = Math.max(10, (stdout?.rows || 24) - 10);
+  // Chat area is 70% of terminal, message boxes are 80% of that
+  const chatAreaWidth = Math.floor((stdout?.columns || 80) * 0.7 * 0.8);
+
+  // Calculate which messages fit in the visible area
+  const visibleMessages = useMemo(() => {
+    if (messages.length === 0) return [];
+
+    // Start from the newest message minus scroll offset
+    let endIndex = messages.length - scrollOffset;
+    if (endIndex <= 0) return [];
+
+    let startIndex = endIndex - 1;
+    let totalHeight = 0;
+
+    // Work backwards from scroll position, adding messages until we run out of space
+    while (startIndex >= 0 && startIndex < messages.length) {
+      const msg = messages[startIndex];
+      if (!msg) break;
+      const msgHeight = estimateMessageHeight(msg.content, chatAreaWidth);
+      if (totalHeight + msgHeight > availableRows && startIndex < endIndex - 1) {
+        startIndex++; // This message won't fit, go back one
+        break;
+      }
+      totalHeight += msgHeight;
+      startIndex--;
+    }
+    startIndex = Math.max(0, startIndex + 1); // Adjust to first visible message
+
+    return messages.slice(startIndex, endIndex);
+  }, [messages, scrollOffset, availableRows, chatAreaWidth]);
 
   // Clear messages and reset scroll when conversation changes
   useEffect(() => {
@@ -91,17 +132,27 @@ function ChatArea({
   useInput((input, key) => {
     if (currentView !== "chat") return;
 
-    // PageUp to see older messages (increase offset)
+    const visibleCount = visibleMessages.length;
+    const maxOffset = Math.max(0, messages.length - 1);
+
+    // PageUp - scroll up by roughly one screen of messages
     if (key.pageUp) {
-      setScrollOffset(prev => {
-        const maxOffset = Math.max(0, messages.length - windowSize);
-        return Math.min(maxOffset, prev + 5);
-      });
+      setScrollOffset(prev => Math.min(maxOffset, prev + Math.max(1, visibleCount - 1)));
     }
 
-    // PageDown to see newer messages (decrease offset)
+    // PageDown - scroll down by roughly one screen of messages
     if (key.pageDown) {
-      setScrollOffset(prev => Math.max(0, prev - 5));
+      setScrollOffset(prev => Math.max(0, prev - Math.max(1, visibleCount - 1)));
+    }
+
+    // Up arrow - scroll up by 1 message
+    if (key.upArrow) {
+      setScrollOffset(prev => Math.min(maxOffset, prev + 1));
+    }
+
+    // Down arrow - scroll down by 1 message
+    if (key.downArrow) {
+      setScrollOffset(prev => Math.max(0, prev - 1));
     }
   }, { isActive: focusArea === "chat" });
 
@@ -152,10 +203,12 @@ function ChatArea({
       case "onboarding":
         return "👋 Welcome to Signal TUI";
       case "chat":
-        const name = selectedConversation 
+        const name = selectedConversation
           ? `💬 ${selectedConversation.displayName}`
           : "💬 Chat";
-        const scrollInfo = scrollOffset > 0 ? ` (History -${scrollOffset})` : "";
+        const scrollInfo = scrollOffset > 0
+          ? ` (${scrollOffset} msgs up - ↓/PgDn to return)`
+          : "";
         return name + scrollInfo;
     }
   };
@@ -200,23 +253,12 @@ function ChatArea({
           );
         }
 
-        // Calculate visible messages window
-        // Slice logic: 
-        // If we have 100 messages, window=20, offset=0 -> slice(80, 100)
-        // offset=5 -> slice(75, 95)
-        const start = Math.max(0, messages.length - windowSize - scrollOffset);
-        const end = Math.max(Math.min(windowSize, messages.length), messages.length - scrollOffset);
-        // Correct slice logic for windowing from end
-        // If messages=30, window=10, scroll=0: start=20, end=30. visible=10.
-        // scroll=5: start=15, end=25. visible=10.
-        
-        const visibleMessages = messages.slice(start, end);
-
+        // visibleMessages is calculated at component level with height-aware logic
         return (
           <Box flexDirection="column" flexGrow={1} overflow="hidden">
             {scrollOffset > 0 && (
                <Box justifyContent="center" marginBottom={0}>
-                 <Text dimColor>--- Scrolling History (PageDown to return) ---</Text>
+                 <Text dimColor>--- Viewing History (↓/PgDn to return) ---</Text>
                </Box>
             )}
             
@@ -249,6 +291,9 @@ function ChatArea({
     }
   };
 
+  // Chat area is focused when either chat or input is focused
+  const isChatAreaFocused = focusArea === "chat" || focusArea === "input";
+
   return (
     <Box
       flexDirection="column"
@@ -256,7 +301,7 @@ function ChatArea({
       height="100%"
       overflow="hidden"
       borderStyle="round"
-      borderColor="gray"
+      borderColor={isChatAreaFocused ? "cyan" : "gray"}
       paddingX={1}
     >
       {/* Header */}
