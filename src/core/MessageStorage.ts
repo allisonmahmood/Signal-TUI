@@ -140,15 +140,30 @@ export class MessageStorage extends EventEmitter {
       content: row.content,
       timestamp: row.timestamp,
       isOutgoing: Boolean(row.is_outgoing),
-      status: row.status as "sent" | "delivered" | "read" | undefined
+      status: row.status as "sent" | "delivered" | "read" | "failed" | undefined
     })).reverse();
   }
 
-  updateMessageStatus(timestamp: number, status: "sent" | "delivered" | "read"): void {
+  updateMessageStatus(timestamp: number, status: "sent" | "delivered" | "read" | "failed"): void {
     if (!this.db) throw new Error("Database not initialized. Call init() first.");
-    const query = this.db!.query(`
-      UPDATE messages 
-      SET status = $status 
+
+    // Get current status to ensure we only upgrade (for group "highest status" behavior)
+    const current = this.db.query(
+      "SELECT status FROM messages WHERE timestamp = $timestamp AND is_outgoing = 1"
+    ).get({ $timestamp: timestamp }) as { status: string } | null;
+
+    if (current) {
+      const statusOrder: Record<string, number> = { failed: 0, sent: 1, delivered: 2, read: 3 };
+      const currentOrder = statusOrder[current.status] ?? 1;
+      const newOrder = statusOrder[status] ?? 1;
+      if (newOrder <= currentOrder) {
+        return; // Don't downgrade status
+      }
+    }
+
+    const query = this.db.query(`
+      UPDATE messages
+      SET status = $status
       WHERE timestamp = $timestamp AND is_outgoing = 1
     `);
 
@@ -156,6 +171,9 @@ export class MessageStorage extends EventEmitter {
       $status: status,
       $timestamp: timestamp
     });
+
+    // Emit event for UI to react
+    this.emit("status-updated", timestamp, status);
   }
 
   getConversationLastMessage(conversationId: string): { timestamp: number; content: string } | null {
