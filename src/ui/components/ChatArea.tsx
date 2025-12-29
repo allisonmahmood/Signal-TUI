@@ -113,12 +113,20 @@ function ChatArea({
       }
     };
 
+    const handleStatusUpdate = (timestamp: number, status: string) => {
+      setMessages(prev => prev.map(msg =>
+        msg.timestamp === timestamp ? { ...msg, status: status as ChatMessage["status"] } : msg
+      ));
+    };
+
     storage.on("new-message", handleNewMessage);
     storage.on("message-replaced", handleReplacement);
+    storage.on("status-updated", handleStatusUpdate);
 
     return () => {
       storage.off("new-message", handleNewMessage);
       storage.off("message-replaced", handleReplacement);
+      storage.off("status-updated", handleStatusUpdate);
     };
   }, [storage, selectedConversation]);
 
@@ -159,19 +167,20 @@ function ChatArea({
   const handleSendMessage = useCallback(async (text: string) => {
     if (!client || !selectedConversation) return;
 
+    // Create optimistic message outside try block so it's accessible in catch
+    const optimisticMessage: ChatMessage = {
+      id: Date.now().toString(),
+      sender: "Me",
+      content: text,
+      timestamp: Date.now(),
+      isOutgoing: true,
+      status: "sent"
+    };
+
     try {
-      // Optimistically add message
-      const optimisitcMessage: ChatMessage = {
-        id: Date.now().toString(),
-        sender: "Me",
-        content: text,
-        timestamp: Date.now(),
-        isOutgoing: true,
-        status: "sent"
-      };
       // Persist locally
       if (storage) {
-        storage.addMessage(optimisitcMessage, selectedConversation.id);
+        storage.addMessage(optimisticMessage, selectedConversation.id);
       }
 
       const timestamp = await client.sendMessage(
@@ -182,17 +191,19 @@ function ChatArea({
 
       // Replace optimistic message with real one
       const realMessage: ChatMessage = {
-        ...optimisitcMessage,
+        ...optimisticMessage,
         id: timestamp.toString(),
         timestamp: timestamp
       };
 
       if (storage) {
-        storage.replaceMessage(optimisitcMessage.id, realMessage, selectedConversation.id);
+        storage.replaceMessage(optimisticMessage.id, realMessage, selectedConversation.id);
       }
     } catch (error) {
-      // TODO: Show error state to user
-      // Silently fail for now to avoid interfering with Ink's terminal output
+      // Mark the optimistic message as failed
+      if (storage) {
+        storage.updateMessageStatus(optimisticMessage.timestamp, "failed");
+      }
     }
   }, [client, selectedConversation, storage]);
 
@@ -280,7 +291,16 @@ function ChatArea({
                      <Text bold color={msg.isOutgoing ? "green" : "blue"}>
                        {msg.isOutgoing ? "Me" : (msg.senderName || msg.sender)}
                      </Text>
-                     <Text dimColor> {new Date(msg.timestamp).toLocaleTimeString()}</Text>
+                     <Box>
+                       <Text dimColor> {new Date(msg.timestamp).toLocaleTimeString()}</Text>
+                       {msg.isOutgoing && (
+                         <Text dimColor={msg.status !== "failed"} color={msg.status === "failed" ? "red" : undefined}>
+                           {msg.status === "read" ? " ✓✓" :
+                            msg.status === "delivered" ? " ✓" :
+                            msg.status === "failed" ? " ✗" : " ○"}
+                         </Text>
+                       )}
+                     </Box>
                   </Box>
                   <Text>{msg.content}</Text>
                 </Box>

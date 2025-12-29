@@ -240,6 +240,21 @@ export default function App() {
     signalClient.on("message", handleEnvelope);
     signalClient.on("sync", handleEnvelope);
 
+    // Listen for receipt events to update message status
+    signalClient.on("receipt", (envelope: SignalEnvelope) => {
+      if (!envelope.receiptMessage || !storageRef.current) return;
+
+      const { type, timestamps } = envelope.receiptMessage;
+
+      // Map receipt type to status (highest wins for groups)
+      const status = type === "READ" || type === "VIEWED" ? "read" : "delivered";
+
+      // Update status for each message timestamp
+      for (const timestamp of timestamps) {
+        storageRef.current.updateMessageStatus(timestamp, status);
+      }
+    });
+
     // Listen for process close
     signalClient.on("close", (code) => {
       // Ignore close events during intentional shutdown
