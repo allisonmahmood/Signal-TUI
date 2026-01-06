@@ -224,4 +224,222 @@ describe("MessageStorage", () => {
         storage.close();
         await unlink(dbPath);
     });
+
+    // =====================================================
+    // replaceMessage tests
+    // =====================================================
+
+    test("replaceMessage should delete old message and insert new one", async () => {
+        const conversationId = "+1234567890";
+        const oldId = "optimistic-123";
+        const oldMessage = {
+            id: oldId,
+            sender: "Me",
+            content: "Hello",
+            timestamp: Date.now(),
+            isOutgoing: true,
+            status: "sent" as const
+        };
+
+        storage.addMessage(oldMessage, conversationId);
+
+        const newMessage = {
+            id: "confirmed-456",
+            sender: "Me",
+            content: "Hello",
+            timestamp: Date.now() + 100,
+            isOutgoing: true,
+            status: "delivered" as const
+        };
+
+        storage.replaceMessage(oldId, newMessage, conversationId);
+
+        const messages = storage.getMessages(conversationId);
+        expect(messages.length).toBe(1);
+        expect(messages[0]!.id).toBe("confirmed-456");
+        expect(messages.find(m => m.id === oldId)).toBeUndefined();
+
+        storage.close();
+        await unlink(dbPath);
+    });
+
+    test("replaceMessage should emit message-replaced event", async () => {
+        const conversationId = "+1234567890";
+        const oldId = "old-id";
+        const oldMessage = {
+            id: oldId,
+            sender: "Me",
+            content: "Test",
+            timestamp: Date.now(),
+            isOutgoing: true
+        };
+
+        storage.addMessage(oldMessage, conversationId);
+
+        const eventPromise = new Promise<{ oldId: string; newMsg: any }>((resolve) => {
+            storage.on("message-replaced", (emittedOldId, emittedNewMsg) => {
+                resolve({ oldId: emittedOldId, newMsg: emittedNewMsg });
+            });
+        });
+
+        const newMessage = {
+            id: "new-id",
+            sender: "Me",
+            content: "Test",
+            timestamp: Date.now() + 100,
+            isOutgoing: true
+        };
+
+        storage.replaceMessage(oldId, newMessage, conversationId);
+
+        const result = await eventPromise;
+        expect(result.oldId).toBe(oldId);
+        expect(result.newMsg.id).toBe("new-id");
+
+        storage.close();
+        await unlink(dbPath);
+    });
+
+    // =====================================================
+    // Pagination with beforeTimestamp tests
+    // =====================================================
+
+    test("getMessages with beforeTimestamp should return messages before the timestamp", async () => {
+        const conversationId = "+1234567890";
+        const baseTime = Date.now();
+
+        // Add 10 messages with sequential timestamps
+        for (let i = 0; i < 10; i++) {
+            storage.addMessage({
+                id: `msg-${i}`,
+                sender: "+1234567890",
+                content: `Message ${i}`,
+                timestamp: baseTime + i * 1000,
+                isOutgoing: false
+            }, conversationId);
+        }
+
+        // Get messages before message 5
+        const pivotTime = baseTime + 5000;
+        const messages = storage.getMessages(conversationId, 50, pivotTime);
+
+        expect(messages.length).toBe(5);
+        expect(messages.every(m => m.timestamp < pivotTime)).toBe(true);
+        expect(messages[messages.length - 1]!.content).toBe("Message 4");
+
+        storage.close();
+        await unlink(dbPath);
+    });
+
+    test("getMessages with beforeTimestamp and limit should paginate correctly", async () => {
+        const conversationId = "+1234567890";
+        const baseTime = Date.now();
+
+        for (let i = 0; i < 10; i++) {
+            storage.addMessage({
+                id: `msg-${i}`,
+                sender: "+1234567890",
+                content: `Message ${i}`,
+                timestamp: baseTime + i * 1000,
+                isOutgoing: false
+            }, conversationId);
+        }
+
+        // Get last 3 messages before message 8
+        const messages = storage.getMessages(conversationId, 3, baseTime + 8000);
+
+        expect(messages.length).toBe(3);
+        expect(messages[0]!.content).toBe("Message 5");
+        expect(messages[2]!.content).toBe("Message 7");
+
+        storage.close();
+        await unlink(dbPath);
+    });
+
+    // =====================================================
+    // Status hierarchy tests (no downgrade)
+    // =====================================================
+
+    test("updateMessageStatus should not downgrade from read to delivered", async () => {
+        const timestamp = Date.now();
+        const msg = {
+            id: "status-test",
+            sender: "Me",
+            content: "Status Test",
+            timestamp: timestamp,
+            isOutgoing: true,
+            status: "sent" as const
+        };
+        const conversationId = "+1234567890";
+
+        storage.addMessage(msg, conversationId);
+
+        // Upgrade to read
+        storage.updateMessageStatus(timestamp, "read");
+        let messages = storage.getMessages(conversationId);
+        expect(messages[0]!.status).toBe("read");
+
+        // Attempt to downgrade to delivered - should be ignored
+        storage.updateMessageStatus(timestamp, "delivered");
+        messages = storage.getMessages(conversationId);
+        expect(messages[0]!.status).toBe("read"); // Still read
+
+        storage.close();
+        await unlink(dbPath);
+    });
+
+    test("updateMessageStatus should not downgrade from delivered to sent", async () => {
+        const timestamp = Date.now();
+        const msg = {
+            id: "status-test-2",
+            sender: "Me",
+            content: "Status Test 2",
+            timestamp: timestamp,
+            isOutgoing: true,
+            status: "sent" as const
+        };
+        const conversationId = "+1234567890";
+
+        storage.addMessage(msg, conversationId);
+        storage.updateMessageStatus(timestamp, "delivered");
+
+        // Attempt downgrade
+        storage.updateMessageStatus(timestamp, "sent");
+
+        const messages = storage.getMessages(conversationId);
+        expect(messages[0]!.status).toBe("delivered");
+
+        storage.close();
+        await unlink(dbPath);
+    });
+
+    test("updateMessageStatus should emit status-updated event on successful update", async () => {
+        const timestamp = Date.now();
+        const msg = {
+            id: "event-test",
+            sender: "Me",
+            content: "Event Test",
+            timestamp: timestamp,
+            isOutgoing: true,
+            status: "sent" as const
+        };
+        const conversationId = "+1234567890";
+
+        storage.addMessage(msg, conversationId);
+
+        const eventPromise = new Promise<{ ts: number; status: string }>((resolve) => {
+            storage.on("status-updated", (emittedTs, emittedStatus) => {
+                resolve({ ts: emittedTs, status: emittedStatus });
+            });
+        });
+
+        storage.updateMessageStatus(timestamp, "delivered");
+
+        const result = await eventPromise;
+        expect(result.ts).toBe(timestamp);
+        expect(result.status).toBe("delivered");
+
+        storage.close();
+        await unlink(dbPath);
+    });
 });

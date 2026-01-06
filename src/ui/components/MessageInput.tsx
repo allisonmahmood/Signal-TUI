@@ -1,5 +1,6 @@
 import { useState, memo, useRef } from "react";
 import { Box, Text, useInput } from "ink";
+import { theme } from "../theme.ts";
 
 interface MessageInputProps {
   onSend: (message: string) => void;
@@ -129,10 +130,10 @@ function MessageInput({ onSend, disabled, focus = true, onEscape }: MessageInput
 
   const renderValue = () => {
     if (!value && !focus) {
-      return <Text dimColor>Type a message...</Text>;
+      return <Text color={theme.text.muted}>Type a message...</Text>;
     }
     if (!value) {
-      return <Text><Text inverse> </Text><Text dimColor>Type a message...</Text></Text>;
+      return <Text><Text inverse> </Text><Text color={theme.text.muted}>Type a message...</Text></Text>;
     }
 
     const before = value.slice(0, cursorOffset);
@@ -140,9 +141,9 @@ function MessageInput({ onSend, disabled, focus = true, onEscape }: MessageInput
     const after = value.slice(cursorOffset + 1);
 
     if (focus) {
-      return <Text>{before}<Text inverse>{cursor}</Text>{after}</Text>;
+      return <Text color={theme.text.primary}>{before}<Text inverse>{cursor}</Text>{after}</Text>;
     }
-    return <Text>{value}</Text>;
+    return <Text color={theme.text.primary}>{value}</Text>;
   };
 
   return (
@@ -152,9 +153,9 @@ function MessageInput({ onSend, disabled, focus = true, onEscape }: MessageInput
       borderBottom={false}
       borderLeft={false}
       borderRight={false}
-      borderColor={focus ? "cyan" : "gray"}
+      borderColor={focus ? theme.border.focused : theme.border.unfocused}
     >
-      <Text color={focus ? "cyan" : "gray"}>› </Text>
+      <Text color={focus ? theme.primary : theme.text.muted}>{"\u203A"} </Text>
       {renderValue()}
     </Box>
   );
