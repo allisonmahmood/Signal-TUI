@@ -10,6 +10,7 @@ import type { ConnectionStatus } from "./components/StatusBar.tsx";
 import type { Account, Conversation, SignalEnvelope, ChatMessage, Attachment } from "../types/types.ts";
 import { MessageStorage } from "../core/MessageStorage.ts";
 import { normalizeNumber } from "../utils/phone.ts";
+import { generateAsciiArt } from "../utils/asciiArt.ts";
 
 // Get signal-cli's attachment storage directory
 function getSignalCliAttachmentsDir(): string {
@@ -210,7 +211,7 @@ export default function App() {
     });
 
     // Listen for messages to persist them
-    const handleEnvelope = (envelope: SignalEnvelope) => {
+    const handleEnvelope = async (envelope: SignalEnvelope) => {
       // Determine conversation ID
       let conversationId: string | null = null;
       let newMessage: ChatMessage | null = null;
@@ -221,10 +222,19 @@ export default function App() {
       // Extract attachments from dataMessage
       if (envelope.dataMessage?.attachments && envelope.dataMessage.attachments.length > 0) {
         const signalCliDir = getSignalCliAttachmentsDir();
-        attachments = envelope.dataMessage.attachments.map(att => ({
-          ...att,
-          localPath: att.id ? join(signalCliDir, att.id) : undefined,
-          downloadStatus: "completed" as const, // signal-cli auto-downloads
+        attachments = await Promise.all(envelope.dataMessage.attachments.map(async att => {
+          const localPath = att.id ? join(signalCliDir, att.id) : undefined;
+          // Generate ASCII art for images
+          let asciiArt: string | undefined;
+          if (att.contentType?.startsWith("image/") && localPath) {
+            asciiArt = await generateAsciiArt(localPath, 40, 20);
+          }
+          return {
+            ...att,
+            localPath,
+            downloadStatus: "completed" as const,
+            asciiArt,
+          };
         }));
       }
 
@@ -257,10 +267,19 @@ export default function App() {
         const syncAttachments = (envelope.syncMessage.sentMessage as any).attachments;
         if (syncAttachments && syncAttachments.length > 0) {
           const signalCliDir = getSignalCliAttachmentsDir();
-          attachments = syncAttachments.map((att: any) => ({
-            ...att,
-            localPath: att.id ? join(signalCliDir, att.id) : undefined,
-            downloadStatus: "completed" as const,
+          attachments = await Promise.all(syncAttachments.map(async (att: any) => {
+            const localPath = att.id ? join(signalCliDir, att.id) : undefined;
+            // Generate ASCII art for images
+            let asciiArt: string | undefined;
+            if (att.contentType?.startsWith("image/") && localPath) {
+              asciiArt = await generateAsciiArt(localPath, 40, 20);
+            }
+            return {
+              ...att,
+              localPath,
+              downloadStatus: "completed" as const,
+              asciiArt,
+            };
           }));
         }
 

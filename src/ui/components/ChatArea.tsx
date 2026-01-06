@@ -1,10 +1,10 @@
 import { useState, useEffect, useRef, memo, useMemo, useCallback } from "react";
 import { Box, Text, useInput, useStdout } from "ink";
-import AsciifyImage from "ink-asciify-image";
 import { existsSync } from "node:fs";
 import { basename } from "node:path";
 import { SignalClient } from "../../core/SignalClient.ts";
 import { getMimeType } from "../../utils/mime.ts";
+import { generateAsciiArt } from "../../utils/asciiArt.ts";
 import type { Conversation, Account, ChatMessage, SignalEnvelope, Attachment } from "../../types/types.ts";
 import { MessageStorage } from "../../core/MessageStorage.ts";
 import { normalizeNumber } from "../../utils/phone.ts";
@@ -20,33 +20,19 @@ interface AttachmentDisplayProps {
 }
 
 function AttachmentDisplay({ attachment, maxWidth }: AttachmentDisplayProps) {
-  // Image display using ink-asciify-image (native Ink component)
-  if (attachment.contentType.startsWith("image/") && attachment.localPath) {
-    // Check if file exists
-    if (!existsSync(attachment.localPath)) {
+  // Image display - show stored ASCII art
+  if (attachment.contentType.startsWith("image/")) {
+    if (attachment.asciiArt) {
       return (
-        <Text color={theme.error}>
-          [IMG: File not found] {attachment.localPath}
-        </Text>
+        <Box flexDirection="column">
+          <Text>{attachment.asciiArt}</Text>
+          {attachment.caption && <Text color={theme.text.muted}>{attachment.caption}</Text>}
+          {attachment.filename && <Text color={theme.text.muted} dimColor>{attachment.filename}</Text>}
+        </Box>
       );
     }
-
-    // Calculate dimensions - keep width reasonable, estimate height from aspect ratio
-    const imageWidth = Math.min(maxWidth, 40);
-    const imageHeight = Math.round(imageWidth * 0.5); // Approximate aspect ratio
-
-    return (
-      <Box flexDirection="column">
-        <AsciifyImage
-          url={attachment.localPath}
-          width={imageWidth}
-          height={imageHeight}
-          tryCorrectAspectRatio={true}
-        />
-        {attachment.caption && <Text color={theme.text.muted}>{attachment.caption}</Text>}
-        {attachment.filename && <Text color={theme.text.muted} dimColor>{attachment.filename}</Text>}
-      </Box>
-    );
+    // Fallback for old messages without ASCII art
+    return <Text color={theme.text.muted}>[Image]</Text>;
   }
 
   // Voice message / audio
@@ -105,16 +91,28 @@ interface DisplayMessage extends ChatMessage {
 }
 
 // Estimate how many terminal rows a message will take
-function estimateMessageHeight(content: string, availableWidth: number): number {
+function estimateMessageHeight(msg: ChatMessage | DisplayMessage, availableWidth: number): number {
   // Base: 2 (borders) + 1 (header row) = 3 rows minimum
   const BASE_HEIGHT = 3;
 
   // Estimate content lines based on character count and width
   // Message box is 80% of chat area, minus padding and borders (~8 chars)
   const contentWidth = Math.max(20, availableWidth - 8);
-  const contentLines = Math.max(1, Math.ceil(content.length / contentWidth));
+  const contentLines = Math.max(1, Math.ceil((msg.content || "").length / contentWidth));
 
-  return BASE_HEIGHT + contentLines;
+  // Account for attachments
+  let attachmentHeight = 0;
+  if (msg.attachments) {
+    for (const att of msg.attachments) {
+      if (att.contentType.startsWith("image/")) {
+        attachmentHeight += 22; // Image height (20) + caption/filename
+      } else {
+        attachmentHeight += 2; // Text-based attachment
+      }
+    }
+  }
+
+  return BASE_HEIGHT + contentLines + attachmentHeight;
 }
 
 interface ChatAreaProps {
@@ -169,7 +167,7 @@ function ChatArea({
     while (startIndex >= 0 && startIndex < messages.length) {
       const msg = messages[startIndex];
       if (!msg) break;
-      const msgHeight = estimateMessageHeight(msg.content, chatAreaWidth);
+      const msgHeight = estimateMessageHeight(msg, chatAreaWidth);
       if (totalHeight + msgHeight > availableRows && startIndex < endIndex - 1) {
         startIndex++; // This message won't fit, go back one
         break;
@@ -311,13 +309,24 @@ function ChatArea({
       }
     }
 
-    // Build attachment metadata for optimistic message
-    const attachmentMeta: Attachment[] | undefined = attachments?.map(path => ({
-      contentType: getMimeType(path),
-      filename: basename(path),
-      localPath: path,
-      downloadStatus: "completed" as const,
-    }));
+    // Build attachment metadata for optimistic message (with ASCII art for images)
+    let attachmentMeta: Attachment[] | undefined;
+    if (attachments && attachments.length > 0) {
+      attachmentMeta = await Promise.all(attachments.map(async (path) => {
+        const contentType = getMimeType(path);
+        let asciiArt: string | undefined;
+        if (contentType.startsWith("image/")) {
+          asciiArt = await generateAsciiArt(path, 40, 20);
+        }
+        return {
+          contentType,
+          filename: basename(path),
+          localPath: path,
+          downloadStatus: "completed" as const,
+          asciiArt,
+        };
+      }));
+    }
 
     // Determine content for display
     const displayContent = text || (attachments?.length ? "[Attachment]" : "");
@@ -459,6 +468,7 @@ function ChatArea({
                     borderStyle="round"
                     borderColor={borderColor}
                     width={messageBoxWidth}
+                    overflow="hidden"
                   >
                     {/* Header row - only show if not consecutive */}
                     {!msg.isConsecutive && (

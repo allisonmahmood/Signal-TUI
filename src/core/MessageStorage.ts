@@ -69,9 +69,17 @@ export class MessageStorage extends EventEmitter {
         caption TEXT,
         local_path TEXT,
         download_status TEXT DEFAULT 'pending',
+        ascii_art TEXT,
         FOREIGN KEY (message_id) REFERENCES messages(id) ON DELETE CASCADE
       )
     `).run();
+
+    // Auto-migrate: Add ascii_art column if it doesn't exist
+    try {
+      this.db!.query("ALTER TABLE attachments ADD COLUMN ascii_art TEXT").run();
+    } catch (e) {
+      // Ignore error if column already exists
+    }
 
     this.db!.query(`
       CREATE INDEX IF NOT EXISTS idx_attachments_message
@@ -118,10 +126,10 @@ export class MessageStorage extends EventEmitter {
       const attachmentQuery = this.db!.query(`
         INSERT OR REPLACE INTO attachments (
           id, message_id, content_type, filename, size,
-          width, height, caption, local_path, download_status
+          width, height, caption, local_path, download_status, ascii_art
         ) VALUES (
           $id, $message_id, $content_type, $filename, $size,
-          $width, $height, $caption, $local_path, $download_status
+          $width, $height, $caption, $local_path, $download_status, $ascii_art
         )
       `);
 
@@ -137,7 +145,8 @@ export class MessageStorage extends EventEmitter {
           $height: att.height || null,
           $caption: att.caption || null,
           $local_path: att.localPath || null,
-          $download_status: att.downloadStatus || "pending"
+          $download_status: att.downloadStatus || "pending",
+          $ascii_art: att.asciiArt || null
         });
       }
     }
@@ -201,7 +210,8 @@ export class MessageStorage extends EventEmitter {
             height: a.height || undefined,
             caption: a.caption || undefined,
             localPath: a.local_path || undefined,
-            downloadStatus: a.download_status as Attachment["downloadStatus"]
+            downloadStatus: a.download_status as Attachment["downloadStatus"],
+            asciiArt: a.ascii_art || undefined
           }))
         : undefined;
 

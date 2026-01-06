@@ -103,6 +103,8 @@ export interface Attachment {
   // Local storage fields
   localPath?: string;
   downloadStatus?: "pending" | "downloading" | "completed" | "failed";
+  // Pre-generated ASCII art for images
+  asciiArt?: string;
 }
 
 export interface ReadMessage {
