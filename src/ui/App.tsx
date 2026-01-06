@@ -1,13 +1,24 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useApp, useInput } from "ink";
+import { join } from "node:path";
+import { homedir } from "node:os";
 import Layout from "./components/Layout.tsx";
 import { SignalClient } from "../core/SignalClient.ts";
 import { findSignalCliPath, getConfigInstructions } from "../core/Config.ts";
 import type { LinkStatus } from "./components/Onboarding.tsx";
 import type { ConnectionStatus } from "./components/StatusBar.tsx";
-import type { Account, Conversation, SignalEnvelope, ChatMessage } from "../types/types.ts";
+import type { Account, Conversation, SignalEnvelope, ChatMessage, Attachment } from "../types/types.ts";
 import { MessageStorage } from "../core/MessageStorage.ts";
 import { normalizeNumber } from "../utils/phone.ts";
+
+// Get signal-cli's attachment storage directory
+function getSignalCliAttachmentsDir(): string {
+  const xdgDataHome = process.env.XDG_DATA_HOME;
+  if (xdgDataHome) {
+    return join(xdgDataHome, "signal-cli", "attachments");
+  }
+  return join(homedir(), ".local", "share", "signal-cli", "attachments");
+}
 
 // Async debug logging - only active when DEBUG=true
 const DEBUG = process.env.DEBUG === "true";
@@ -203,10 +214,26 @@ export default function App() {
       // Determine conversation ID
       let conversationId: string | null = null;
       let newMessage: ChatMessage | null = null;
+      let attachments: Attachment[] = [];
 
       debugLog(`[App] Received envelope: ${JSON.stringify(envelope)}`);
 
-      if (envelope.dataMessage?.message) {
+      // Extract attachments from dataMessage
+      if (envelope.dataMessage?.attachments && envelope.dataMessage.attachments.length > 0) {
+        const signalCliDir = getSignalCliAttachmentsDir();
+        attachments = envelope.dataMessage.attachments.map(att => ({
+          ...att,
+          localPath: att.id ? join(signalCliDir, att.id) : undefined,
+          downloadStatus: "completed" as const, // signal-cli auto-downloads
+        }));
+      }
+
+      // Check if we have a message or attachments to process
+      const hasContent = envelope.dataMessage?.message || attachments.length > 0;
+      const hasSyncContent = envelope.syncMessage?.sentMessage?.message ||
+        (envelope.syncMessage?.sentMessage as any)?.attachments?.length > 0;
+
+      if (hasContent && envelope.dataMessage) {
         // Incoming Message
         if (envelope.dataMessage.groupInfo) {
            // Group Message: Conversation ID is the GROUP ID
@@ -215,37 +242,49 @@ export default function App() {
            // Direct Message: Conversation ID is the SENDER
            conversationId = normalizeNumber(envelope.sourceNumber || envelope.sourceUuid);
         }
-        
+
         newMessage = {
           id: envelope.timestamp.toString(),
           sender: envelope.sourceNumber || envelope.sourceUuid || "Unknown",
           senderName: envelope.sourceName,
-          content: envelope.dataMessage.message,
+          content: envelope.dataMessage.message || "",
           timestamp: envelope.timestamp,
           isOutgoing: false,
+          attachments: attachments.length > 0 ? attachments : undefined,
         };
-      } else if (envelope.syncMessage?.sentMessage?.message) {
-        // Outgoing Sync Message
+      } else if (hasSyncContent && envelope.syncMessage?.sentMessage) {
+        // Outgoing Sync Message - extract attachments from sync message too
+        const syncAttachments = (envelope.syncMessage.sentMessage as any).attachments;
+        if (syncAttachments && syncAttachments.length > 0) {
+          const signalCliDir = getSignalCliAttachmentsDir();
+          attachments = syncAttachments.map((att: any) => ({
+            ...att,
+            localPath: att.id ? join(signalCliDir, att.id) : undefined,
+            downloadStatus: "completed" as const,
+          }));
+        }
+
         if (envelope.syncMessage.sentMessage.groupInfo) {
            // Group Message: Conversation ID is the GROUP ID
            conversationId = envelope.syncMessage.sentMessage.groupInfo.groupId;
         } else {
            // Direct Message: Conversation ID is the DESTINATION
-           conversationId = normalizeNumber(envelope.syncMessage.sentMessage.destinationNumber || 
+           conversationId = normalizeNumber(envelope.syncMessage.sentMessage.destinationNumber ||
                                           envelope.syncMessage.sentMessage.destinationUuid);
         }
-        
+
         newMessage = {
           id: envelope.timestamp.toString(),
           sender: "Me",
-          content: envelope.syncMessage.sentMessage.message,
+          content: envelope.syncMessage.sentMessage.message || "",
           timestamp: envelope.timestamp,
           isOutgoing: true,
+          attachments: attachments.length > 0 ? attachments : undefined,
         };
       }
 
       if (conversationId && newMessage && storageRef.current) {
-         debugLog(`[App] Saving to DB: ${conversationId} ${newMessage.id}`);
+         debugLog(`[App] Saving to DB: ${conversationId} ${newMessage.id} attachments=${newMessage.attachments?.length || 0}`);
          storageRef.current.addMessage(newMessage, conversationId);
       } else {
          debugLog(`[App] NOT saving: conversationId=${conversationId}, hasMessage=${!!newMessage}, hasStorage=${!!storageRef.current}`);

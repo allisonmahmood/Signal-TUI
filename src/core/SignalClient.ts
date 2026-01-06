@@ -228,17 +228,31 @@ export class SignalClient extends EventEmitter {
   /**
    * Send a message to a recipient
    * @param recipient - Phone number, UUID, or group ID
-   * @param message - The message text
-   * @param isGroup - Whether this is a group message
+   * @param message - The message text (optional if sending attachments)
+   * @param options - Optional settings: isGroup, attachments (array of file paths)
    * @returns Promise that resolves with the message timestamp
    */
-  async sendMessage(recipient: string, message: string, isGroup: boolean = false): Promise<number> {
-    const params: Record<string, unknown> = { message };
-    if (isGroup) {
+  async sendMessage(
+    recipient: string,
+    message?: string,
+    options: { isGroup?: boolean; attachments?: string[] } = {}
+  ): Promise<number> {
+    const params: Record<string, unknown> = {};
+
+    if (message) {
+      params.message = message;
+    }
+
+    if (options.attachments && options.attachments.length > 0) {
+      params.attachments = options.attachments;
+    }
+
+    if (options.isGroup) {
       params.groupId = recipient;
     } else {
       params.recipient = [recipient];
     }
+
     const response = await this.sendRequest<{ timestamp: number }>("send", params);
     return response.timestamp;
   }

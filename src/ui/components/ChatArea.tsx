@@ -1,6 +1,9 @@
 import { useState, useEffect, useRef, memo, useMemo, useCallback } from "react";
 import { Box, Text, useInput, useStdout } from "ink";
+import { existsSync } from "node:fs";
+import { basename } from "node:path";
 import { SignalClient } from "../../core/SignalClient.ts";
+import { getMimeType } from "../../utils/mime.ts";
 import type { Conversation, Account, ChatMessage, SignalEnvelope, Attachment } from "../../types/types.ts";
 import { MessageStorage } from "../../core/MessageStorage.ts";
 import { normalizeNumber } from "../../utils/phone.ts";
@@ -8,6 +11,123 @@ import MessageInput from "./MessageInput.tsx";
 import { theme } from "../theme.ts";
 import { formatTime } from "../../utils/formatTime.ts";
 import type { FocusArea } from "../App.tsx";
+
+// Dynamically import terminal-image (ESM module)
+let terminalImage: typeof import("terminal-image") | null = null;
+import("terminal-image").then(mod => { terminalImage = mod; }).catch(() => {});
+
+// AttachmentDisplay component for rendering images, audio, and files
+interface AttachmentDisplayProps {
+  attachment: Attachment;
+  maxWidth: number;
+}
+
+function AttachmentDisplay({ attachment, maxWidth }: AttachmentDisplayProps) {
+  const [imageOutput, setImageOutput] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    // Only try to render images with a valid local path
+    if (attachment.contentType.startsWith("image/") && attachment.localPath) {
+      // Check if file exists before trying to render
+      if (!existsSync(attachment.localPath)) {
+        setError("File not found");
+        return;
+      }
+
+      // Try to load and render the image
+      const loadImage = async () => {
+        try {
+          if (!terminalImage) {
+            // Module not loaded yet, wait a bit
+            await new Promise(r => setTimeout(r, 100));
+            if (!terminalImage) {
+              setError("Image rendering unavailable");
+              return;
+            }
+          }
+
+          const result = await terminalImage.default.file(attachment.localPath!, {
+            width: Math.min(maxWidth, 40),
+            preserveAspectRatio: true,
+          });
+          setImageOutput(result);
+        } catch (e) {
+          setError("Failed to load image");
+        }
+      };
+
+      loadImage();
+    }
+  }, [attachment.localPath, attachment.contentType, maxWidth]);
+
+  // Image display
+  if (attachment.contentType.startsWith("image/")) {
+    if (imageOutput) {
+      return (
+        <Box flexDirection="column">
+          <Text>{imageOutput}</Text>
+          {attachment.caption && <Text color={theme.text.muted}>{attachment.caption}</Text>}
+          {attachment.filename && <Text color={theme.text.muted} dimColor>{attachment.filename}</Text>}
+        </Box>
+      );
+    }
+    // Fallback to label while loading or on error
+    return (
+      <Box>
+        <Text color={theme.warning}>
+          [IMG] {attachment.filename || "image"}
+          {attachment.downloadStatus === "pending" && " (downloading...)"}
+          {error && ` (${error})`}
+        </Text>
+      </Box>
+    );
+  }
+
+  // Voice message / audio
+  if (attachment.contentType.startsWith("audio/")) {
+    // Rough duration estimate from file size (assuming ~16kbps for voice)
+    const duration = attachment.size ? `~${Math.round(attachment.size / 2000)}s` : "";
+    return (
+      <Box>
+        <Text color={theme.secondary}>
+          [VOICE] {duration} {attachment.filename || "voice message"}
+        </Text>
+        {attachment.localPath && (
+          <Text color={theme.text.muted} dimColor> {attachment.localPath}</Text>
+        )}
+      </Box>
+    );
+  }
+
+  // Video
+  if (attachment.contentType.startsWith("video/")) {
+    const sizeStr = attachment.size ? `(${Math.round(attachment.size / 1024)}KB)` : "";
+    return (
+      <Box>
+        <Text color={theme.warning}>
+          [VIDEO] {attachment.filename || "video"} {sizeStr}
+        </Text>
+        {attachment.localPath && (
+          <Text color={theme.text.muted} dimColor> {attachment.localPath}</Text>
+        )}
+      </Box>
+    );
+  }
+
+  // Generic file
+  const sizeStr = attachment.size ? `(${Math.round(attachment.size / 1024)}KB)` : "";
+  return (
+    <Box>
+      <Text color={theme.warning}>
+        [FILE] {attachment.filename || "attachment"} {sizeStr}
+      </Text>
+      {attachment.localPath && (
+        <Text color={theme.text.muted} dimColor> {attachment.localPath}</Text>
+      )}
+    </Box>
+  );
+}
 
 // Extended message type with grouping info
 interface DisplayMessage extends ChatMessage {
@@ -212,17 +332,40 @@ function ChatArea({
     }
   }, { isActive: focusArea === "chat" });
 
-  const handleSendMessage = useCallback(async (text: string) => {
+  const handleSendMessage = useCallback(async (text: string, attachments?: string[]) => {
     if (!client || !selectedConversation) return;
+
+    // Validate attachment paths exist
+    if (attachments && attachments.length > 0) {
+      for (const path of attachments) {
+        if (!existsSync(path)) {
+          // TODO: Show error to user - for now just log and skip
+          console.error(`[ChatArea] Attachment not found: ${path}`);
+          return;
+        }
+      }
+    }
+
+    // Build attachment metadata for optimistic message
+    const attachmentMeta: Attachment[] | undefined = attachments?.map(path => ({
+      contentType: getMimeType(path),
+      filename: basename(path),
+      localPath: path,
+      downloadStatus: "completed" as const,
+    }));
+
+    // Determine content for display
+    const displayContent = text || (attachments?.length ? "[Attachment]" : "");
 
     // Create optimistic message outside try block so it's accessible in catch
     const optimisticMessage: ChatMessage = {
       id: Date.now().toString(),
       sender: "Me",
-      content: text,
+      content: displayContent,
       timestamp: Date.now(),
       isOutgoing: true,
-      status: "sent"
+      status: "sent",
+      attachments: attachmentMeta,
     };
 
     try {
@@ -233,15 +376,18 @@ function ChatArea({
 
       const timestamp = await client.sendMessage(
         selectedConversation.id,
-        text,
-        selectedConversation.type === "group"
+        text || undefined,
+        {
+          isGroup: selectedConversation.type === "group",
+          attachments,
+        }
       );
 
       // Replace optimistic message with real one
       const realMessage: ChatMessage = {
         ...optimisticMessage,
         id: timestamp.toString(),
-        timestamp: timestamp
+        timestamp: timestamp,
       };
 
       if (storage) {
@@ -388,12 +534,13 @@ function ChatArea({
 
                     {/* Attachments */}
                     {msg.attachments && msg.attachments.length > 0 && (
-                      <Box flexDirection="row" gap={1}>
+                      <Box flexDirection="column" gap={0}>
                         {msg.attachments.map((att, i) => (
-                          <Text key={i} color={theme.warning}>
-                            {getAttachmentLabel(att)}
-                            {att.filename ? ` ${att.filename}` : ""}
-                          </Text>
+                          <AttachmentDisplay
+                            key={att.id || i}
+                            attachment={att}
+                            maxWidth={messageBoxWidth - 4}
+                          />
                         ))}
                       </Box>
                     )}

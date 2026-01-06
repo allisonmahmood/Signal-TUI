@@ -100,6 +100,9 @@ export interface Attachment {
   width?: number;
   height?: number;
   caption?: string;
+  // Local storage fields
+  localPath?: string;
+  downloadStatus?: "pending" | "downloading" | "completed" | "failed";
 }
 
 export interface ReadMessage {
@@ -210,5 +213,6 @@ export interface ChatMessage {
   timestamp: number;
   isOutgoing: boolean;  // true if sent by us
   status?: "sent" | "delivered" | "read" | "failed";
+  attachments?: Attachment[];
 }
 

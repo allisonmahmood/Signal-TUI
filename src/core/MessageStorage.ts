@@ -4,7 +4,7 @@ import { dirname } from "node:path";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { EventEmitter } from "node:events";
-import type { ChatMessage } from "../types/types";
+import type { ChatMessage, Attachment } from "../types/types.ts";
 
 export class MessageStorage extends EventEmitter {
   private db?: Database;
@@ -52,9 +52,31 @@ export class MessageStorage extends EventEmitter {
       }
 
       this.db!.query(`
-      CREATE INDEX IF NOT EXISTS idx_conversation_timestamp 
+      CREATE INDEX IF NOT EXISTS idx_conversation_timestamp
       ON messages(conversation_id, timestamp);
     `);
+
+    // Create attachments table
+    this.db!.query(`
+      CREATE TABLE IF NOT EXISTS attachments (
+        id TEXT PRIMARY KEY,
+        message_id TEXT NOT NULL,
+        content_type TEXT NOT NULL,
+        filename TEXT,
+        size INTEGER,
+        width INTEGER,
+        height INTEGER,
+        caption TEXT,
+        local_path TEXT,
+        download_status TEXT DEFAULT 'pending',
+        FOREIGN KEY (message_id) REFERENCES messages(id) ON DELETE CASCADE
+      )
+    `).run();
+
+    this.db!.query(`
+      CREATE INDEX IF NOT EXISTS idx_attachments_message
+      ON attachments(message_id)
+    `).run();
 
     this.initialized = true;
   }
@@ -90,6 +112,35 @@ export class MessageStorage extends EventEmitter {
       $is_outgoing: msg.isOutgoing ? 1 : 0,
       $status: msg.status || "sent"
     });
+
+    // Save attachments if present
+    if (msg.attachments && msg.attachments.length > 0) {
+      const attachmentQuery = this.db!.query(`
+        INSERT OR REPLACE INTO attachments (
+          id, message_id, content_type, filename, size,
+          width, height, caption, local_path, download_status
+        ) VALUES (
+          $id, $message_id, $content_type, $filename, $size,
+          $width, $height, $caption, $local_path, $download_status
+        )
+      `);
+
+      for (let i = 0; i < msg.attachments.length; i++) {
+        const att = msg.attachments[i];
+        attachmentQuery.run({
+          $id: att.id || `${msg.id}-${i}`,
+          $message_id: msg.id,
+          $content_type: att.contentType,
+          $filename: att.filename || null,
+          $size: att.size || null,
+          $width: att.width || null,
+          $height: att.height || null,
+          $caption: att.caption || null,
+          $local_path: att.localPath || null,
+          $download_status: att.downloadStatus || "pending"
+        });
+      }
+    }
   }
 
   /**
@@ -132,16 +183,39 @@ export class MessageStorage extends EventEmitter {
     const query = this.db!.query(sql);
     const rows = query.all(params) as any[];
 
+    // Load attachments for all messages in this batch
+    const attachmentQuery = this.db!.query(`
+      SELECT * FROM attachments WHERE message_id = $message_id
+    `);
+
     // Convert back to ChatMessage objects and reverse (so oldest is first)
-    return rows.map(row => ({
-      id: row.id,
-      sender: row.sender,
-      senderName: row.sender_name || undefined,
-      content: row.content,
-      timestamp: row.timestamp,
-      isOutgoing: Boolean(row.is_outgoing),
-      status: row.status as "sent" | "delivered" | "read" | "failed" | undefined
-    })).reverse();
+    return rows.map(row => {
+      const attachmentRows = attachmentQuery.all({ $message_id: row.id }) as any[];
+      const attachments: Attachment[] | undefined = attachmentRows.length > 0
+        ? attachmentRows.map(a => ({
+            id: a.id,
+            contentType: a.content_type,
+            filename: a.filename || undefined,
+            size: a.size || undefined,
+            width: a.width || undefined,
+            height: a.height || undefined,
+            caption: a.caption || undefined,
+            localPath: a.local_path || undefined,
+            downloadStatus: a.download_status as Attachment["downloadStatus"]
+          }))
+        : undefined;
+
+      return {
+        id: row.id,
+        sender: row.sender,
+        senderName: row.sender_name || undefined,
+        content: row.content,
+        timestamp: row.timestamp,
+        isOutgoing: Boolean(row.is_outgoing),
+        status: row.status as "sent" | "delivered" | "read" | "failed" | undefined,
+        attachments
+      };
+    }).reverse();
   }
 
   updateMessageStatus(timestamp: number, status: "sent" | "delivered" | "read" | "failed"): void {
@@ -174,6 +248,31 @@ export class MessageStorage extends EventEmitter {
 
     // Emit event for UI to react
     this.emit("status-updated", timestamp, status);
+  }
+
+  /**
+   * Update attachment download status and local path
+   */
+  updateAttachmentStatus(
+    attachmentId: string,
+    status: "pending" | "downloading" | "completed" | "failed",
+    localPath?: string
+  ): void {
+    if (!this.db) throw new Error("Database not initialized. Call init() first.");
+
+    const query = this.db.query(`
+      UPDATE attachments
+      SET download_status = $status, local_path = COALESCE($local_path, local_path)
+      WHERE id = $id
+    `);
+
+    query.run({
+      $id: attachmentId,
+      $status: status,
+      $local_path: localPath || null
+    });
+
+    this.emit("attachment-updated", attachmentId, status, localPath);
   }
 
   getConversationLastMessage(conversationId: string): { timestamp: number; content: string } | null {

@@ -1,12 +1,72 @@
 import { useState, memo, useRef } from "react";
 import { Box, Text, useInput } from "ink";
+import { homedir } from "node:os";
 import { theme } from "../theme.ts";
 
 interface MessageInputProps {
-  onSend: (message: string) => void;
+  onSend: (message: string, attachments?: string[]) => void;
   disabled?: boolean;
   focus?: boolean;
   onEscape?: () => void;
+}
+
+/**
+ * Parse input for slash commands like /attach
+ * @returns Parsed message and optional attachments
+ */
+function parseInput(text: string): { message: string; attachments?: string[] } {
+  const trimmed = text.trim();
+
+  // /attach <filepath> [message]
+  // Supports quoted paths for spaces: /attach "/path/with spaces/file.png"
+  if (trimmed.startsWith("/attach ")) {
+    const rest = trimmed.slice(8).trim();
+
+    let filePath: string;
+    let message: string = "";
+
+    // Check for quoted path
+    if (rest.startsWith('"')) {
+      const endQuote = rest.indexOf('"', 1);
+      if (endQuote > 0) {
+        filePath = rest.slice(1, endQuote);
+        message = rest.slice(endQuote + 1).trim();
+      } else {
+        // No closing quote, treat everything as path
+        filePath = rest.slice(1);
+      }
+    } else if (rest.startsWith("'")) {
+      const endQuote = rest.indexOf("'", 1);
+      if (endQuote > 0) {
+        filePath = rest.slice(1, endQuote);
+        message = rest.slice(endQuote + 1).trim();
+      } else {
+        filePath = rest.slice(1);
+      }
+    } else {
+      // No quotes, split on first space
+      const spaceIndex = rest.indexOf(" ");
+      if (spaceIndex > 0) {
+        filePath = rest.slice(0, spaceIndex);
+        message = rest.slice(spaceIndex + 1).trim();
+      } else {
+        filePath = rest;
+      }
+    }
+
+    // Expand ~ to home directory
+    if (filePath.startsWith("~")) {
+      filePath = filePath.replace(/^~/, homedir());
+    }
+
+    return {
+      message,
+      attachments: [filePath],
+    };
+  }
+
+  // No command, regular message
+  return { message: trimmed };
 }
 
 function MessageInput({ onSend, disabled, focus = true, onEscape }: MessageInputProps) {
@@ -32,7 +92,11 @@ function MessageInput({ onSend, disabled, focus = true, onEscape }: MessageInput
     if (key.return) {
       const trimmed = valueRef.current.trim();
       if (trimmed && !disabled) {
-        onSend(trimmed);
+        const parsed = parseInput(trimmed);
+        // Only send if we have a message or attachments
+        if (parsed.message || (parsed.attachments && parsed.attachments.length > 0)) {
+          onSend(parsed.message, parsed.attachments);
+        }
         valueRef.current = "";
         cursorRef.current = 0;
         update();
