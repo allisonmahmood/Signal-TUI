@@ -50,8 +50,11 @@ export class MessageStorage extends EventEmitter {
       // Auto-migrate: Try to add status column if it doesn't exist
       try {
         this.db!.query("ALTER TABLE messages ADD COLUMN status TEXT DEFAULT 'sent'").run();
-      } catch (e) {
-        // Ignore error if column likely exists
+      } catch (e: any) {
+        // Only ignore "duplicate column" errors, rethrow others
+        if (!e.message?.includes("duplicate column")) {
+          throw e;
+        }
       }
 
       this.db!.query(`
@@ -80,8 +83,11 @@ export class MessageStorage extends EventEmitter {
     // Auto-migrate: Add ascii_art column if it doesn't exist
     try {
       this.db!.query("ALTER TABLE attachments ADD COLUMN ascii_art TEXT").run();
-    } catch (e) {
-      // Ignore error if column already exists
+    } catch (e: any) {
+      // Only ignore "duplicate column" errors, rethrow others
+      if (!e.message?.includes("duplicate column")) {
+        throw e;
+      }
     }
 
     this.db!.query(`

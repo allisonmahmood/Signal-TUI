@@ -11,7 +11,7 @@ import { normalizeNumber } from "../../utils/phone.ts";
 import MessageInput from "./MessageInput.tsx";
 import { theme } from "../theme.ts";
 import { formatTime } from "../../utils/formatTime.ts";
-import type { FocusArea } from "../App.tsx";
+import { ASCII_ART_WIDTH, ASCII_ART_HEIGHT, type FocusArea } from "../App.tsx";
 
 // AttachmentDisplay component for rendering images, audio, and files
 interface AttachmentDisplayProps {
@@ -139,6 +139,7 @@ function ChatArea({
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [scrollOffset, setScrollOffset] = useState(0);
   const [pendingG, setPendingG] = useState(false);
+  const [sendError, setSendError] = useState<string | null>(null);
   const { stdout } = useStdout();
 
   // Calculate available space for messages
@@ -298,12 +299,17 @@ function ChatArea({
   const handleSendMessage = useCallback(async (text: string, attachments?: string[]) => {
     if (!client || !selectedConversation) return;
 
+    // Clear any previous error
+    setSendError(null);
+
     // Validate attachment paths exist
     if (attachments && attachments.length > 0) {
       for (const path of attachments) {
         if (!existsSync(path)) {
-          // TODO: Show error to user - for now just log and skip
-          console.error(`[ChatArea] Attachment not found: ${path}`);
+          const errorMsg = `File not found: ${path}`;
+          setSendError(errorMsg);
+          // Auto-clear error after 5 seconds
+          setTimeout(() => setSendError(null), 5000);
           return;
         }
       }
@@ -316,7 +322,7 @@ function ChatArea({
         const contentType = getMimeType(path);
         let asciiArt: string | undefined;
         if (contentType.startsWith("image/")) {
-          asciiArt = await generateAsciiArt(path, 40, 20);
+          asciiArt = await generateAsciiArt(path, ASCII_ART_WIDTH, ASCII_ART_HEIGHT);
         }
         return {
           contentType,
@@ -562,9 +568,16 @@ function ChatArea({
       {/* Content */}
       {getContent()}
 
+      {/* Error display */}
+      {sendError && (
+        <Box marginTop={1}>
+          <Text color={theme.error}>{theme.symbols.error || "✗"} {sendError}</Text>
+        </Box>
+      )}
+
       {/* Input area */}
       {currentView === "chat" && selectedConversation && (
-        <Box marginTop={1}>
+        <Box marginTop={sendError ? 0 : 1}>
           <MessageInput onSend={handleSendMessage} focus={focusArea === "input"} onEscape={cycleFocus} />
         </Box>
       )}

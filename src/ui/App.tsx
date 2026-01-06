@@ -12,6 +12,10 @@ import { MessageStorage } from "../core/MessageStorage.ts";
 import { normalizeNumber } from "../utils/phone.ts";
 import { generateAsciiArt } from "../utils/asciiArt.ts";
 
+// ASCII art dimensions for terminal display
+export const ASCII_ART_WIDTH = 40;
+export const ASCII_ART_HEIGHT = 20;
+
 // Get signal-cli's attachment storage directory
 function getSignalCliAttachmentsDir(): string {
   const xdgDataHome = process.env.XDG_DATA_HOME;
@@ -30,7 +34,7 @@ async function processAttachments(
     const localPath = att.id ? join(signalCliDir, att.id) : undefined;
     let asciiArt: string | undefined;
     if (att.contentType?.startsWith("image/") && localPath) {
-      asciiArt = await generateAsciiArt(localPath, 40, 20);
+      asciiArt = await generateAsciiArt(localPath, ASCII_ART_WIDTH, ASCII_ART_HEIGHT);
     }
     return {
       ...att,
