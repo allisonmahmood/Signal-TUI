@@ -7,7 +7,7 @@ import { theme } from "../theme.ts";
 /**
  * Analyze /attach command for visual feedback
  */
-function analyzeAttachCommand(text: string): {
+export function analyzeAttachCommand(text: string): {
   isAttachCommand: boolean;
   commandPart: string;
   filePath: string;
@@ -108,7 +108,7 @@ interface MessageInputProps {
  * Parse input for slash commands like /attach
  * @returns Parsed message and optional attachments
  */
-function parseInput(text: string): { message: string; attachments?: string[] } {
+export function parseInput(text: string): { message: string; attachments?: string[] } {
   const trimmed = text.trim();
 
   // /attach <filepath> [message]
