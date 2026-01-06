@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, memo, useMemo, useCallback } from "react";
 import { Box, Text, useInput, useStdout } from "ink";
+import AsciifyImage from "ink-asciify-image";
 import { existsSync } from "node:fs";
 import { basename } from "node:path";
 import { SignalClient } from "../../core/SignalClient.ts";
@@ -19,83 +20,31 @@ interface AttachmentDisplayProps {
 }
 
 function AttachmentDisplay({ attachment, maxWidth }: AttachmentDisplayProps) {
-  const [imageOutput, setImageOutput] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
-
-  useEffect(() => {
-    // Only try to render images with a valid local path
-    if (!attachment.contentType.startsWith("image/") || !attachment.localPath) {
-      return;
-    }
-
-    // Check if file exists before trying to render
+  // Image display using ink-asciify-image (native Ink component)
+  if (attachment.contentType.startsWith("image/") && attachment.localPath) {
+    // Check if file exists
     if (!existsSync(attachment.localPath)) {
-      setError("File not found");
-      return;
-    }
-
-    let cancelled = false;
-    setLoading(true);
-
-    // Load terminal-image and render
-    const loadImage = async () => {
-      try {
-        // Dynamic import each time to ensure it's loaded
-        const terminalImage = await import("terminal-image");
-
-        if (cancelled) return;
-
-        const result = await terminalImage.default.file(attachment.localPath!, {
-          width: Math.min(maxWidth, 40),
-          preserveAspectRatio: true,
-        });
-
-        if (cancelled) return;
-
-        setImageOutput(result);
-        setError(null);
-      } catch (e) {
-        if (!cancelled) {
-          setError(`Failed: ${e instanceof Error ? e.message : "unknown"}`);
-        }
-      } finally {
-        if (!cancelled) {
-          setLoading(false);
-        }
-      }
-    };
-
-    loadImage();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [attachment.localPath, attachment.contentType, maxWidth]);
-
-  // Image display
-  if (attachment.contentType.startsWith("image/")) {
-    if (imageOutput) {
       return (
-        <Box flexDirection="column">
-          <Text>{imageOutput}</Text>
-          {attachment.caption && <Text color={theme.text.muted}>{attachment.caption}</Text>}
-          {attachment.filename && <Text color={theme.text.muted} dimColor>{attachment.filename}</Text>}
-        </Box>
+        <Text color={theme.error}>
+          [IMG: File not found] {attachment.localPath}
+        </Text>
       );
     }
-    // Fallback to label while loading or on error
+
+    // Calculate dimensions - keep width reasonable, estimate height from aspect ratio
+    const imageWidth = Math.min(maxWidth, 40);
+    const imageHeight = Math.round(imageWidth * 0.5); // Approximate aspect ratio
+
     return (
       <Box flexDirection="column">
-        <Text color={theme.warning}>
-          [IMG] {attachment.filename || "image"}
-          {loading && " (loading...)"}
-          {attachment.downloadStatus === "pending" && " (downloading...)"}
-          {error && ` (${error})`}
-        </Text>
-        {attachment.localPath && (
-          <Text color={theme.text.muted} dimColor>{attachment.localPath}</Text>
-        )}
+        <AsciifyImage
+          url={attachment.localPath}
+          width={imageWidth}
+          height={imageHeight}
+          tryCorrectAspectRatio={true}
+        />
+        {attachment.caption && <Text color={theme.text.muted}>{attachment.caption}</Text>}
+        {attachment.filename && <Text color={theme.text.muted} dimColor>{attachment.filename}</Text>}
       </Box>
     );
   }
