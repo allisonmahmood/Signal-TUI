@@ -12,10 +12,6 @@ import { theme } from "../theme.ts";
 import { formatTime } from "../../utils/formatTime.ts";
 import type { FocusArea } from "../App.tsx";
 
-// Dynamically import terminal-image (ESM module)
-let terminalImage: typeof import("terminal-image") | null = null;
-import("terminal-image").then(mod => { terminalImage = mod; }).catch(() => {});
-
 // AttachmentDisplay component for rendering images, audio, and files
 interface AttachmentDisplayProps {
   attachment: Attachment;
@@ -25,40 +21,56 @@ interface AttachmentDisplayProps {
 function AttachmentDisplay({ attachment, maxWidth }: AttachmentDisplayProps) {
   const [imageOutput, setImageOutput] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
 
   useEffect(() => {
     // Only try to render images with a valid local path
-    if (attachment.contentType.startsWith("image/") && attachment.localPath) {
-      // Check if file exists before trying to render
-      if (!existsSync(attachment.localPath)) {
-        setError("File not found");
-        return;
-      }
-
-      // Try to load and render the image
-      const loadImage = async () => {
-        try {
-          if (!terminalImage) {
-            // Module not loaded yet, wait a bit
-            await new Promise(r => setTimeout(r, 100));
-            if (!terminalImage) {
-              setError("Image rendering unavailable");
-              return;
-            }
-          }
-
-          const result = await terminalImage.default.file(attachment.localPath!, {
-            width: Math.min(maxWidth, 40),
-            preserveAspectRatio: true,
-          });
-          setImageOutput(result);
-        } catch (e) {
-          setError("Failed to load image");
-        }
-      };
-
-      loadImage();
+    if (!attachment.contentType.startsWith("image/") || !attachment.localPath) {
+      return;
     }
+
+    // Check if file exists before trying to render
+    if (!existsSync(attachment.localPath)) {
+      setError("File not found");
+      return;
+    }
+
+    let cancelled = false;
+    setLoading(true);
+
+    // Load terminal-image and render
+    const loadImage = async () => {
+      try {
+        // Dynamic import each time to ensure it's loaded
+        const terminalImage = await import("terminal-image");
+
+        if (cancelled) return;
+
+        const result = await terminalImage.default.file(attachment.localPath!, {
+          width: Math.min(maxWidth, 40),
+          preserveAspectRatio: true,
+        });
+
+        if (cancelled) return;
+
+        setImageOutput(result);
+        setError(null);
+      } catch (e) {
+        if (!cancelled) {
+          setError(`Failed: ${e instanceof Error ? e.message : "unknown"}`);
+        }
+      } finally {
+        if (!cancelled) {
+          setLoading(false);
+        }
+      }
+    };
+
+    loadImage();
+
+    return () => {
+      cancelled = true;
+    };
   }, [attachment.localPath, attachment.contentType, maxWidth]);
 
   // Image display
@@ -74,12 +86,16 @@ function AttachmentDisplay({ attachment, maxWidth }: AttachmentDisplayProps) {
     }
     // Fallback to label while loading or on error
     return (
-      <Box>
+      <Box flexDirection="column">
         <Text color={theme.warning}>
           [IMG] {attachment.filename || "image"}
+          {loading && " (loading...)"}
           {attachment.downloadStatus === "pending" && " (downloading...)"}
           {error && ` (${error})`}
         </Text>
+        {attachment.localPath && (
+          <Text color={theme.text.muted} dimColor>{attachment.localPath}</Text>
+        )}
       </Box>
     );
   }
