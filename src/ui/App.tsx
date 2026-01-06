@@ -21,6 +21,26 @@ function getSignalCliAttachmentsDir(): string {
   return join(homedir(), ".local", "share", "signal-cli", "attachments");
 }
 
+// Process attachments and generate ASCII art for images
+async function processAttachments(
+  rawAttachments: Attachment[],
+  signalCliDir: string
+): Promise<Attachment[]> {
+  return Promise.all(rawAttachments.map(async att => {
+    const localPath = att.id ? join(signalCliDir, att.id) : undefined;
+    let asciiArt: string | undefined;
+    if (att.contentType?.startsWith("image/") && localPath) {
+      asciiArt = await generateAsciiArt(localPath, 40, 20);
+    }
+    return {
+      ...att,
+      localPath,
+      downloadStatus: "completed" as const,
+      asciiArt,
+    };
+  }));
+}
+
 // Async debug logging - only active when DEBUG=true
 const DEBUG = process.env.DEBUG === "true";
 const debugLog = DEBUG
@@ -47,6 +67,10 @@ export default function App() {
 
   // Track if we're intentionally stopping (for graceful shutdown)
   const isStoppingRef = useRef(false);
+
+  // Message processing queue to ensure ordered processing of async handlers
+  const messageQueueRef = useRef<SignalEnvelope[]>([]);
+  const processingRef = useRef(false);
 
   // Cycle focus to next area
   const cycleFocus = useCallback(() => {
@@ -210,46 +234,30 @@ export default function App() {
       setErrorMessage(error.message);
     });
 
-    // Listen for messages to persist them
+    // Process a single envelope (called from queue)
     const handleEnvelope = async (envelope: SignalEnvelope) => {
-      // Determine conversation ID
       let conversationId: string | null = null;
       let newMessage: ChatMessage | null = null;
       let attachments: Attachment[] = [];
+      const signalCliDir = getSignalCliAttachmentsDir();
 
       debugLog(`[App] Received envelope: ${JSON.stringify(envelope)}`);
 
       // Extract attachments from dataMessage
       if (envelope.dataMessage?.attachments && envelope.dataMessage.attachments.length > 0) {
-        const signalCliDir = getSignalCliAttachmentsDir();
-        attachments = await Promise.all(envelope.dataMessage.attachments.map(async att => {
-          const localPath = att.id ? join(signalCliDir, att.id) : undefined;
-          // Generate ASCII art for images
-          let asciiArt: string | undefined;
-          if (att.contentType?.startsWith("image/") && localPath) {
-            asciiArt = await generateAsciiArt(localPath, 40, 20);
-          }
-          return {
-            ...att,
-            localPath,
-            downloadStatus: "completed" as const,
-            asciiArt,
-          };
-        }));
+        attachments = await processAttachments(envelope.dataMessage.attachments, signalCliDir);
       }
 
       // Check if we have a message or attachments to process
       const hasContent = envelope.dataMessage?.message || attachments.length > 0;
       const hasSyncContent = envelope.syncMessage?.sentMessage?.message ||
-        (envelope.syncMessage?.sentMessage as any)?.attachments?.length > 0;
+        (envelope.syncMessage?.sentMessage?.attachments?.length ?? 0) > 0;
 
       if (hasContent && envelope.dataMessage) {
         // Incoming Message
         if (envelope.dataMessage.groupInfo) {
-           // Group Message: Conversation ID is the GROUP ID
            conversationId = envelope.dataMessage.groupInfo.groupId;
         } else {
-           // Direct Message: Conversation ID is the SENDER
            conversationId = normalizeNumber(envelope.sourceNumber || envelope.sourceUuid);
         }
 
@@ -264,30 +272,14 @@ export default function App() {
         };
       } else if (hasSyncContent && envelope.syncMessage?.sentMessage) {
         // Outgoing Sync Message - extract attachments from sync message too
-        const syncAttachments = (envelope.syncMessage.sentMessage as any).attachments;
+        const syncAttachments = envelope.syncMessage.sentMessage.attachments;
         if (syncAttachments && syncAttachments.length > 0) {
-          const signalCliDir = getSignalCliAttachmentsDir();
-          attachments = await Promise.all(syncAttachments.map(async (att: any) => {
-            const localPath = att.id ? join(signalCliDir, att.id) : undefined;
-            // Generate ASCII art for images
-            let asciiArt: string | undefined;
-            if (att.contentType?.startsWith("image/") && localPath) {
-              asciiArt = await generateAsciiArt(localPath, 40, 20);
-            }
-            return {
-              ...att,
-              localPath,
-              downloadStatus: "completed" as const,
-              asciiArt,
-            };
-          }));
+          attachments = await processAttachments(syncAttachments, signalCliDir);
         }
 
         if (envelope.syncMessage.sentMessage.groupInfo) {
-           // Group Message: Conversation ID is the GROUP ID
            conversationId = envelope.syncMessage.sentMessage.groupInfo.groupId;
         } else {
-           // Direct Message: Conversation ID is the DESTINATION
            conversationId = normalizeNumber(envelope.syncMessage.sentMessage.destinationNumber ||
                                           envelope.syncMessage.sentMessage.destinationUuid);
         }
@@ -310,8 +302,31 @@ export default function App() {
       }
     };
 
-    signalClient.on("message", handleEnvelope);
-    signalClient.on("sync", handleEnvelope);
+    // Process messages from queue sequentially to ensure ordering
+    const processMessageQueue = async () => {
+      if (processingRef.current) return;
+      processingRef.current = true;
+
+      while (messageQueueRef.current.length > 0) {
+        const envelope = messageQueueRef.current.shift()!;
+        try {
+          await handleEnvelope(envelope);
+        } catch (error) {
+          debugLog(`[App] Error processing envelope: ${error}`);
+        }
+      }
+
+      processingRef.current = false;
+    };
+
+    // Queue incoming messages for sequential processing
+    const queueMessage = (envelope: SignalEnvelope) => {
+      messageQueueRef.current.push(envelope);
+      processMessageQueue();
+    };
+
+    signalClient.on("message", queueMessage);
+    signalClient.on("sync", queueMessage);
 
     // Listen for receipt events to update message status
     signalClient.on("receipt", (envelope: SignalEnvelope) => {

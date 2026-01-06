@@ -1,6 +1,8 @@
 import { asciifyImage } from "ink-asciify-image";
 import { existsSync } from "node:fs";
 
+const DEBUG = process.env.DEBUG === "true";
+
 /**
  * Generate ASCII art from an image file
  * @param imagePath - Path to the image file
@@ -15,13 +17,18 @@ export async function generateAsciiArt(
 ): Promise<string | undefined> {
   try {
     if (!existsSync(imagePath)) {
+      if (DEBUG) {
+        console.error(`[asciiArt] File not found: ${imagePath}`);
+      }
       return undefined;
     }
 
     const lines = await asciifyImage(imagePath, { width, height });
     return lines.join("\n");
   } catch (error) {
-    // Image conversion failed - return undefined
+    if (DEBUG) {
+      console.error(`[asciiArt] Failed to convert image: ${imagePath}`, error);
+    }
     return undefined;
   }
 }

@@ -57,6 +57,7 @@ export interface SyncMessage {
     message?: string;
     expiresInSeconds?: number;
     groupInfo?: GroupInfo;
+    attachments?: Attachment[];
   };
   readMessages?: ReadMessage[];
 }

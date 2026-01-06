@@ -73,8 +73,8 @@ describe("analyzeAttachCommand", () => {
       const result = analyzeAttachCommand('/attach "/path/still/typing');
       expect(result.isAttachCommand).toBe(true);
       expect(result.filePath).toBe("/path/still/typing");
-      // fileExists should be null when still in quotes
-      expect(result.fileExists).toBeNull();
+      // inQuotes should be true when quote is not closed
+      expect(result.inQuotes).toBe(true);
     });
   });
 
@@ -92,21 +92,28 @@ describe("analyzeAttachCommand", () => {
     });
   });
 
-  describe("file existence checking", () => {
-    test("returns fileExists: true for existing file", () => {
-      // package.json should exist in cwd
-      const result = analyzeAttachCommand("/attach package.json");
-      expect(result.fileExists).toBe(true);
+  describe("inQuotes detection", () => {
+    // Note: File existence checking is now debounced in the component state,
+    // not returned directly by analyzeAttachCommand
+
+    test("returns inQuotes: false for completed quoted path", () => {
+      const result = analyzeAttachCommand('/attach "/path/to/file.png"');
+      expect(result.inQuotes).toBe(false);
     });
 
-    test("returns fileExists: false for non-existent file", () => {
-      const result = analyzeAttachCommand("/attach /nonexistent/file.xyz");
-      expect(result.fileExists).toBe(false);
-    });
-
-    test("returns fileExists: null when still typing (in quotes)", () => {
+    test("returns inQuotes: true when still typing in double quotes", () => {
       const result = analyzeAttachCommand('/attach "/still/typing');
-      expect(result.fileExists).toBeNull();
+      expect(result.inQuotes).toBe(true);
+    });
+
+    test("returns inQuotes: true when still typing in single quotes", () => {
+      const result = analyzeAttachCommand("/attach '/still/typing");
+      expect(result.inQuotes).toBe(true);
+    });
+
+    test("returns inQuotes: false for unquoted path", () => {
+      const result = analyzeAttachCommand("/attach /path/to/file.png");
+      expect(result.inQuotes).toBe(false);
     });
   });
 

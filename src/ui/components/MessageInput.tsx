@@ -1,28 +1,30 @@
-import { useState, memo, useRef } from "react";
+import { useState, memo, useRef, useEffect } from "react";
 import { Box, Text, useInput } from "ink";
 import { homedir } from "node:os";
 import { existsSync } from "node:fs";
 import { theme } from "../theme.ts";
 
-/**
- * Analyze /attach command for visual feedback
- */
-export function analyzeAttachCommand(text: string): {
+export interface AttachCommandInfo {
   isAttachCommand: boolean;
   commandPart: string;
   filePath: string;
   filePathExpanded: string;
   message: string;
-  fileExists: boolean | null; // null = not yet determined (still typing)
+  inQuotes: boolean;
   stage: "command" | "filepath" | "message";
-} {
-  const defaultResult = {
+}
+
+/**
+ * Analyze /attach command for visual feedback (without file existence check)
+ */
+export function analyzeAttachCommand(text: string): AttachCommandInfo {
+  const defaultResult: AttachCommandInfo = {
     isAttachCommand: false,
     commandPart: "",
     filePath: "",
     filePathExpanded: "",
     message: "",
-    fileExists: null,
+    inQuotes: false,
     stage: "command" as const,
   };
 
@@ -79,11 +81,6 @@ export function analyzeAttachCommand(text: string): {
     ? filePath.replace(/^~/, homedir())
     : filePath;
 
-  // Check if file exists (only if we have a non-empty path and not still typing)
-  const fileExists = filePath.length > 0 && !inQuotes
-    ? existsSync(filePathExpanded)
-    : null;
-
   const stage = message.length > 0 ? "message" : filePath.length > 0 ? "filepath" : "command";
 
   return {
@@ -92,7 +89,7 @@ export function analyzeAttachCommand(text: string): {
     filePath,
     filePathExpanded,
     message,
-    fileExists,
+    inQuotes,
     stage,
   };
 }
@@ -170,7 +167,37 @@ function MessageInput({ onSend, disabled, focus = true, onEscape }: MessageInput
   // State only for triggering re-renders
   const [, forceRender] = useState(0);
 
+  // Debounced file existence check
+  const [fileExists, setFileExists] = useState<boolean | null>(null);
+  const fileCheckTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   const update = () => forceRender(n => n + 1);
+
+  // Debounce file existence check to avoid sync I/O on every keystroke
+  const attachInfo = analyzeAttachCommand(valueRef.current);
+  useEffect(() => {
+    // Clear pending timeout
+    if (fileCheckTimeoutRef.current) {
+      clearTimeout(fileCheckTimeoutRef.current);
+      fileCheckTimeoutRef.current = null;
+    }
+
+    // Only check if we have a complete path (not still typing in quotes)
+    if (attachInfo.isAttachCommand && attachInfo.filePath && !attachInfo.inQuotes) {
+      // Debounce by 150ms
+      fileCheckTimeoutRef.current = setTimeout(() => {
+        setFileExists(existsSync(attachInfo.filePathExpanded));
+      }, 150);
+    } else {
+      setFileExists(null);
+    }
+
+    return () => {
+      if (fileCheckTimeoutRef.current) {
+        clearTimeout(fileCheckTimeoutRef.current);
+      }
+    };
+  }, [attachInfo.filePathExpanded, attachInfo.inQuotes, attachInfo.isAttachCommand]);
 
   // Handle all input ourselves
   useInput((input, key) => {
@@ -286,9 +313,6 @@ function MessageInput({ onSend, disabled, focus = true, onEscape }: MessageInput
   const value = valueRef.current;
   const cursorOffset = cursorRef.current;
 
-  // Analyze for /attach command
-  const attachInfo = analyzeAttachCommand(value);
-
   const renderValue = () => {
     if (!value && !focus) {
       return <Text color={theme.text.muted}>Type a message...</Text>;
@@ -364,16 +388,16 @@ function MessageInput({ onSend, disabled, focus = true, onEscape }: MessageInput
       parts.push(<Text key="sp1"> </Text>);
 
       if (attachInfo.filePath) {
-        // File path with validation indicator
-        const pathColor = attachInfo.fileExists === true
+        // File path with validation indicator (uses debounced fileExists state)
+        const pathColor = fileExists === true
           ? theme.success
-          : attachInfo.fileExists === false
+          : fileExists === false
             ? theme.error
             : theme.warning;
 
-        const pathIndicator = attachInfo.fileExists === true
+        const pathIndicator = fileExists === true
           ? " \u2713" // checkmark
-          : attachInfo.fileExists === false
+          : fileExists === false
             ? " \u2717" // X
             : ""; // still typing
 
@@ -391,14 +415,14 @@ function MessageInput({ onSend, disabled, focus = true, onEscape }: MessageInput
           parts.push(
             <Text key="path" color={pathColor}>
               {pathBefore}<Text inverse>{pathCursor}</Text>{pathAfter}
-              <Text color={attachInfo.fileExists === true ? theme.success : attachInfo.fileExists === false ? theme.error : theme.text.muted}>{pathIndicator}</Text>
+              <Text color={fileExists === true ? theme.success : fileExists === false ? theme.error : theme.text.muted}>{pathIndicator}</Text>
             </Text>
           );
         } else {
           parts.push(
             <Text key="path" color={pathColor}>
               {attachInfo.filePath}
-              <Text color={attachInfo.fileExists === true ? theme.success : attachInfo.fileExists === false ? theme.error : theme.text.muted}>{pathIndicator}</Text>
+              <Text color={fileExists === true ? theme.success : fileExists === false ? theme.error : theme.text.muted}>{pathIndicator}</Text>
             </Text>
           );
         }
@@ -447,10 +471,10 @@ function MessageInput({ onSend, disabled, focus = true, onEscape }: MessageInput
     if (attachInfo.stage === "command" && !value.includes(" ")) {
       return <Text color={theme.text.muted}> (type file path next)</Text>;
     }
-    if (attachInfo.stage === "filepath" && attachInfo.filePath && attachInfo.fileExists === true) {
+    if (attachInfo.stage === "filepath" && attachInfo.filePath && fileExists === true) {
       return <Text color={theme.text.muted}> (press space to add caption, or Enter to send)</Text>;
     }
-    if (attachInfo.stage === "filepath" && attachInfo.filePath && attachInfo.fileExists === false) {
+    if (attachInfo.stage === "filepath" && attachInfo.filePath && fileExists === false) {
       return <Text color={theme.error}> (file not found)</Text>;
     }
     if (attachInfo.stage === "filepath" && !attachInfo.filePath) {

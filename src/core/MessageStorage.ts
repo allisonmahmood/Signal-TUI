@@ -30,6 +30,9 @@ export class MessageStorage extends EventEmitter {
     // Create database
     this.db = new Database(this.dbPath, { create: true });
 
+    // Enable foreign key constraints
+    this.db!.query("PRAGMA foreign_keys = ON").run();
+
     // Create tables
       this.db!.query(`
         CREATE TABLE IF NOT EXISTS messages (
@@ -173,10 +176,10 @@ export class MessageStorage extends EventEmitter {
   getMessages(conversationId: string, limit: number = 50, beforeTimestamp?: number): ChatMessage[] {
     if (!this.db) throw new Error("Database not initialized. Call init() first.");
     let sql = `
-      SELECT * FROM messages 
+      SELECT * FROM messages
       WHERE conversation_id = $conversation_id
     `;
-    
+
     const params: any = {
       $conversation_id: conversationId,
       $limit: limit
@@ -192,28 +195,45 @@ export class MessageStorage extends EventEmitter {
     const query = this.db!.query(sql);
     const rows = query.all(params) as any[];
 
-    // Load attachments for all messages in this batch
-    const attachmentQuery = this.db!.query(`
-      SELECT * FROM attachments WHERE message_id = $message_id
-    `);
+    // Batch load all attachments for messages in this result set (fixes N+1 query)
+    const messageIds = rows.map(row => row.id);
+    const attachmentsByMessageId = new Map<string, Attachment[]>();
+
+    if (messageIds.length > 0) {
+      // Use a single query with IN clause to fetch all attachments at once
+      const placeholders = messageIds.map(() => "?").join(", ");
+      const attachmentQuery = this.db!.query(`
+        SELECT * FROM attachments WHERE message_id IN (${placeholders})
+      `);
+      const attachmentRows = attachmentQuery.all(...messageIds) as any[];
+
+      // Group attachments by message_id
+      for (const a of attachmentRows) {
+        const attachment: Attachment = {
+          id: a.id,
+          contentType: a.content_type,
+          filename: a.filename || undefined,
+          size: a.size || undefined,
+          width: a.width || undefined,
+          height: a.height || undefined,
+          caption: a.caption || undefined,
+          localPath: a.local_path || undefined,
+          downloadStatus: a.download_status as Attachment["downloadStatus"],
+          asciiArt: a.ascii_art || undefined
+        };
+
+        const existing = attachmentsByMessageId.get(a.message_id);
+        if (existing) {
+          existing.push(attachment);
+        } else {
+          attachmentsByMessageId.set(a.message_id, [attachment]);
+        }
+      }
+    }
 
     // Convert back to ChatMessage objects and reverse (so oldest is first)
     return rows.map(row => {
-      const attachmentRows = attachmentQuery.all({ $message_id: row.id }) as any[];
-      const attachments: Attachment[] | undefined = attachmentRows.length > 0
-        ? attachmentRows.map(a => ({
-            id: a.id,
-            contentType: a.content_type,
-            filename: a.filename || undefined,
-            size: a.size || undefined,
-            width: a.width || undefined,
-            height: a.height || undefined,
-            caption: a.caption || undefined,
-            localPath: a.local_path || undefined,
-            downloadStatus: a.download_status as Attachment["downloadStatus"],
-            asciiArt: a.ascii_art || undefined
-          }))
-        : undefined;
+      const attachments = attachmentsByMessageId.get(row.id);
 
       return {
         id: row.id,
