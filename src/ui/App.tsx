@@ -4,6 +4,7 @@ import Layout from "./components/Layout.tsx";
 import { SignalClient } from "../core/SignalClient.ts";
 import { findSignalCliPath, getConfigInstructions } from "../core/Config.ts";
 import type { LinkStatus } from "./components/Onboarding.tsx";
+import type { ConnectionStatus } from "./components/StatusBar.tsx";
 import type { Account, Conversation, SignalEnvelope, ChatMessage } from "../types/types.ts";
 import { MessageStorage } from "../core/MessageStorage.ts";
 import { normalizeNumber } from "../utils/phone.ts";
@@ -29,6 +30,8 @@ export default function App() {
   const storageRef = useRef<MessageStorage>(new MessageStorage());
   const [storageReady, setStorageReady] = useState(false);
   const [focusArea, setFocusArea] = useState<FocusArea>("sidebar");
+  const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>("disconnected");
+  const [conversationCount, setConversationCount] = useState(0);
 
   // Track if we're intentionally stopping (for graceful shutdown)
   const isStoppingRef = useRef(false);
@@ -47,6 +50,12 @@ export default function App() {
     // Tab to cycle focus: sidebar -> chat -> input -> sidebar
     if (key.tab && currentView === "chat") {
       cycleFocus();
+      return;
+    }
+
+    // q to quit (when not in input mode)
+    if (input === "q") {
+      exit();
       return;
     }
 
@@ -173,12 +182,18 @@ export default function App() {
       }
     };
 
+    // Listen for ready event (connected)
+    signalClient.on("ready", () => {
+      setConnectionStatus("connected");
+    });
+
     // Listen for errors
     signalClient.on("error", (error) => {
       // Ignore errors during shutdown
       if (isStoppingRef.current) return;
-      
+
       debugLog(`[App] SignalClient error: ${error.message}`);
+      setConnectionStatus("reconnecting");
       setLinkStatus("error");
       setErrorMessage(error.message);
     });
@@ -259,7 +274,8 @@ export default function App() {
     signalClient.on("close", (code) => {
       // Ignore close events during intentional shutdown
       if (isStoppingRef.current) return;
-      
+
+      setConnectionStatus("disconnected");
       if (code !== 0 && linkStatus !== "success") {
         setLinkStatus("error");
         setErrorMessage(`signal-cli exited with code ${code}`);
@@ -295,6 +311,8 @@ export default function App() {
       focusArea={focusArea}
       setFocusArea={setFocusArea}
       cycleFocus={cycleFocus}
+      connectionStatus={connectionStatus}
+      conversationCount={conversationCount}
     />
   );
 }

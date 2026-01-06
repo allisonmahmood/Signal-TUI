@@ -1,6 +1,7 @@
 import { Box, Text } from "ink";
 import { useState, useEffect } from "react";
 import qrcode from "qrcode-terminal";
+import { theme } from "../theme.ts";
 
 export type LinkStatus = "loading" | "waiting" | "success" | "error";
 
@@ -35,8 +36,8 @@ export default function Onboarding({ linkUri, status, errorMessage }: Onboarding
       case "loading":
         return (
           <Box flexDirection="column" alignItems="center">
-            <Text color="cyan">⏳ Connecting to Signal CLI...</Text>
-            <Text dimColor>Please wait</Text>
+            <Text color={theme.primary}>Connecting to Signal CLI...</Text>
+            <Text color={theme.text.muted}>Please wait</Text>
           </Box>
         );
 
@@ -52,28 +53,28 @@ export default function Onboarding({ linkUri, status, errorMessage }: Onboarding
             <Box
               flexDirection="column"
               borderStyle="round"
-              borderColor="cyan"
+              borderColor={theme.border.focused}
               paddingX={2}
               paddingY={1}
             >
-              <Text bold color="cyan">
-                📱 Link Your Signal Account
+              <Text bold color={theme.primary}>
+                Link Your Signal Account
               </Text>
               <Text> </Text>
               <Text>
-                <Text color="yellow">1.</Text> Open <Text bold>Signal</Text> on your phone
+                <Text color={theme.warning}>1.</Text> Open <Text bold>Signal</Text> on your phone
               </Text>
               <Text>
-                <Text color="yellow">2.</Text> Go to <Text bold>Settings</Text> → <Text bold>Linked Devices</Text>
+                <Text color={theme.warning}>2.</Text> Go to <Text bold>Settings</Text> {"\u2192"} <Text bold>Linked Devices</Text>
               </Text>
               <Text>
-                <Text color="yellow">3.</Text> Tap the <Text bold>+</Text> button
+                <Text color={theme.warning}>3.</Text> Tap the <Text bold>+</Text> button
               </Text>
               <Text>
-                <Text color="yellow">4.</Text> Scan this QR code
+                <Text color={theme.warning}>4.</Text> Scan this QR code
               </Text>
               <Text> </Text>
-              <Text dimColor>Waiting for you to scan...</Text>
+              <Text color={theme.text.muted}>Waiting for you to scan...</Text>
             </Box>
           </Box>
         );
@@ -81,21 +82,21 @@ export default function Onboarding({ linkUri, status, errorMessage }: Onboarding
       case "success":
         return (
           <Box flexDirection="column" alignItems="center">
-            <Text color="green" bold>
-              ✓ Device Linked Successfully!
+            <Text color={theme.success} bold>
+              {theme.symbols.connected} Device Linked Successfully!
             </Text>
-            <Text dimColor>Redirecting to chat...</Text>
+            <Text color={theme.text.muted}>Redirecting to chat...</Text>
           </Box>
         );
 
       case "error":
         return (
           <Box flexDirection="column" alignItems="center">
-            <Text color="red" bold>
-              ✗ Linking Failed
+            <Text color={theme.error} bold>
+              {"\u2717"} Linking Failed
             </Text>
-            <Text color="red">{errorMessage || "An unknown error occurred"}</Text>
-            <Text dimColor>Press Ctrl+C to exit and try again</Text>
+            <Text color={theme.error}>{errorMessage || "An unknown error occurred"}</Text>
+            <Text color={theme.text.muted}>Press Ctrl+C to exit and try again</Text>
           </Box>
         );
     }
@@ -109,14 +110,14 @@ export default function Onboarding({ linkUri, status, errorMessage }: Onboarding
       width="100%"
       height="100%"
       borderStyle="round"
-      borderColor="gray"
+      borderColor={theme.border.unfocused}
       paddingX={2}
       paddingY={1}
     >
       {/* Header */}
       <Box marginBottom={2}>
-        <Text bold color="cyan">
-          👋 Welcome to Signal TUI
+        <Text bold color={theme.primary}>
+          Welcome to Signal TUI
         </Text>
       </Box>
 
@@ -125,7 +126,7 @@ export default function Onboarding({ linkUri, status, errorMessage }: Onboarding
 
       {/* Footer */}
       <Box marginTop={2}>
-        <Text dimColor>Press Ctrl+C to exit</Text>
+        <Text color={theme.text.muted}>Press Ctrl+C to exit</Text>
       </Box>
     </Box>
   );

@@ -1,11 +1,23 @@
 import { useState, useEffect, useRef, memo, useMemo, useCallback } from "react";
 import { Box, Text, useInput, useStdout } from "ink";
 import { SignalClient } from "../../core/SignalClient.ts";
-import type { Conversation, Account, ChatMessage, SignalEnvelope } from "../../types/types.ts";
+import type { Conversation, Account, ChatMessage, SignalEnvelope, Attachment } from "../../types/types.ts";
 import { MessageStorage } from "../../core/MessageStorage.ts";
 import { normalizeNumber } from "../../utils/phone.ts";
 import MessageInput from "./MessageInput.tsx";
+import { theme } from "../theme.ts";
+import { formatTime } from "../../utils/formatTime.ts";
 import type { FocusArea } from "../App.tsx";
+
+// Extended message type with grouping info
+interface DisplayMessage extends ChatMessage {
+  isConsecutive: boolean;
+  attachments?: Attachment[];
+  quote?: {
+    author?: string;
+    text?: string;
+  };
+}
 
 // Estimate how many terminal rows a message will take
 function estimateMessageHeight(content: string, availableWidth: number): number {
@@ -43,16 +55,22 @@ function ChatArea({
 }: ChatAreaProps) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [scrollOffset, setScrollOffset] = useState(0);
+  const [pendingG, setPendingG] = useState(false);
   const { stdout } = useStdout();
 
   // Calculate available space for messages
   // Total rows - Header(~2) - Input(~2) - borders/margins(~6) = ~10 overhead
   const availableRows = Math.max(10, (stdout?.rows || 24) - 10);
-  // Chat area is 70% of terminal, message boxes are 80% of that
-  const chatAreaWidth = Math.floor((stdout?.columns || 80) * 0.7 * 0.8);
+  // Chat area is 70% of terminal, minus borders(2) and paddingX(2) for content area
+  const terminalCols = stdout?.columns || 80;
+  const chatAreaContentWidth = Math.floor(terminalCols * 0.7) - 4;
+  // Message boxes are 80% of the content area
+  const messageBoxWidth = Math.floor(chatAreaContentWidth * 0.8);
+  // For height estimation (used in pagination)
+  const chatAreaWidth = messageBoxWidth;
 
-  // Calculate which messages fit in the visible area
-  const visibleMessages = useMemo(() => {
+  // Calculate which messages fit in the visible area and add grouping info
+  const visibleMessages = useMemo((): DisplayMessage[] => {
     if (messages.length === 0) return [];
 
     // Start from the newest message minus scroll offset
@@ -76,7 +94,17 @@ function ChatArea({
     }
     startIndex = Math.max(0, startIndex + 1); // Adjust to first visible message
 
-    return messages.slice(startIndex, endIndex);
+    const slice = messages.slice(startIndex, endIndex);
+
+    // Add consecutive grouping info
+    return slice.map((msg, index): DisplayMessage => {
+      const prevMsg = slice[index - 1];
+      const isConsecutive = !!(prevMsg &&
+        prevMsg.sender === msg.sender &&
+        (msg.timestamp - prevMsg.timestamp) < 300000); // 5 minutes
+
+      return { ...msg, isConsecutive };
+    });
   }, [messages, scrollOffset, availableRows, chatAreaWidth]);
 
   // Clear messages and reset scroll when conversation changes
@@ -143,6 +171,9 @@ function ChatArea({
     const visibleCount = visibleMessages.length;
     const maxOffset = Math.max(0, messages.length - 1);
 
+    const scrollUp = () => setScrollOffset(prev => Math.min(maxOffset, prev + 1));
+    const scrollDown = () => setScrollOffset(prev => Math.max(0, prev - 1));
+
     // PageUp - scroll up by roughly one screen of messages
     if (key.pageUp) {
       setScrollOffset(prev => Math.min(maxOffset, prev + Math.max(1, visibleCount - 1)));
@@ -153,14 +184,31 @@ function ChatArea({
       setScrollOffset(prev => Math.max(0, prev - Math.max(1, visibleCount - 1)));
     }
 
-    // Up arrow - scroll up by 1 message
-    if (key.upArrow) {
-      setScrollOffset(prev => Math.min(maxOffset, prev + 1));
+    // Arrow keys
+    if (key.upArrow) scrollUp();
+    if (key.downArrow) scrollDown();
+
+    // Vim keys: k for up, j for down
+    if (input === "k") scrollUp();
+    if (input === "j") scrollDown();
+
+    // G for bottom (newest messages)
+    if (input === "G") {
+      setScrollOffset(0);
+      setPendingG(false);
     }
 
-    // Down arrow - scroll down by 1 message
-    if (key.downArrow) {
-      setScrollOffset(prev => Math.max(0, prev - 1));
+    // gg for top (oldest messages)
+    if (input === "g") {
+      if (pendingG) {
+        setScrollOffset(maxOffset);
+        setPendingG(false);
+      } else {
+        setPendingG(true);
+        setTimeout(() => setPendingG(false), 500);
+      }
+    } else {
+      setPendingG(false);
     }
   }, { isActive: focusArea === "chat" });
 
@@ -210,18 +258,24 @@ function ChatArea({
   const getHeader = () => {
     switch (currentView) {
       case "loading":
-        return "⏳ Loading...";
+        return "Loading...";
       case "onboarding":
-        return "👋 Welcome to Signal TUI";
+        return "Welcome to Signal TUI";
       case "chat":
-        const name = selectedConversation
-          ? `💬 ${selectedConversation.displayName}`
-          : "💬 Chat";
+        const name = selectedConversation?.displayName ?? "Chat";
         const scrollInfo = scrollOffset > 0
-          ? ` (${scrollOffset} msgs up - ↓/PgDn to return)`
+          ? ` (${scrollOffset} up)`
           : "";
         return name + scrollInfo;
     }
+  };
+
+  // Helper for attachment display
+  const getAttachmentLabel = (att: Attachment): string => {
+    if (att.contentType.startsWith("image/")) return "[IMG]";
+    if (att.contentType.startsWith("video/")) return "[VIDEO]";
+    if (att.contentType.startsWith("audio/")) return "[VOICE]";
+    return "[FILE]";
   };
 
   const getContent = () => {
@@ -229,28 +283,28 @@ function ChatArea({
       case "loading":
         return (
           <Box flexDirection="column" alignItems="center" justifyContent="center" flexGrow={1}>
-            <Text>Connecting to Signal...</Text>
-            <Text dimColor>Please wait</Text>
+            <Text color={theme.text.primary}>Connecting to Signal...</Text>
+            <Text color={theme.text.muted}>Please wait</Text>
           </Box>
         );
       case "onboarding":
         return (
           <Box flexDirection="column" alignItems="center" justifyContent="center" flexGrow={1}>
-            <Text bold color="cyan">Welcome to Signal TUI! 🚀</Text>
+            <Text bold color={theme.primary}>Welcome to Signal TUI</Text>
             <Text> </Text>
-            <Text>A terminal-based Signal messenger client</Text>
-            <Text dimColor>Built with Ink + React</Text>
+            <Text color={theme.text.secondary}>A terminal-based Signal messenger client</Text>
+            <Text color={theme.text.muted}>Built with Ink + React</Text>
             <Text> </Text>
-            <Text color="green">✓ Signal CLI connected</Text>
-            <Text dimColor>Select a conversation to start messaging</Text>
+            <Text color={theme.success}>{theme.symbols.connected} Signal CLI connected</Text>
+            <Text color={theme.text.muted}>Select a conversation to start messaging</Text>
           </Box>
         );
       case "chat":
         if (!selectedConversation) {
           return (
             <Box flexDirection="column" alignItems="center" justifyContent="center" flexGrow={1}>
-              <Text dimColor>Select a conversation from the sidebar</Text>
-              <Text dimColor>to start chatting</Text>
+              <Text color={theme.text.muted}>Select a conversation from the sidebar</Text>
+              <Text color={theme.text.muted}>to start chatting</Text>
             </Box>
           );
         }
@@ -258,54 +312,98 @@ function ChatArea({
         if (messages.length === 0) {
           return (
             <Box flexDirection="column" flexGrow={1} justifyContent="center" alignItems="center">
-              <Text dimColor>No messages yet</Text>
-              <Text dimColor>Start the conversation!</Text>
+              <Text color={theme.text.muted}>No messages yet</Text>
+              <Text color={theme.text.muted}>Start the conversation!</Text>
             </Box>
           );
         }
 
-        // visibleMessages is calculated at component level with height-aware logic
         return (
           <Box flexDirection="column" flexGrow={1} overflow="hidden">
             {scrollOffset > 0 && (
                <Box justifyContent="center" marginBottom={0}>
-                 <Text dimColor>--- Viewing History (↓/PgDn to return) ---</Text>
+                 <Text color={theme.text.muted}>--- viewing history (j/PgDn to return) ---</Text>
                </Box>
             )}
-            
-            {visibleMessages.map((msg) => (
-              <Box 
-                key={msg.id} 
-                flexDirection="column" 
-                marginBottom={0} 
-                alignItems={msg.isOutgoing ? "flex-end" : "flex-start"}
-              >
-                <Box 
-                   flexDirection="column" 
-                   paddingX={1}
-                   borderStyle="round"
-                   borderColor={msg.isOutgoing ? "green" : "gray"}
-                   width="80%"
+
+            {visibleMessages.map((msg) => {
+              const borderColor = msg.isOutgoing
+                ? theme.message.outgoing.border
+                : theme.message.incoming.border;
+              const senderColor = msg.isOutgoing
+                ? theme.message.outgoing.sender
+                : theme.message.incoming.sender;
+
+              return (
+                <Box
+                  key={msg.id}
+                  flexDirection="column"
+                  marginBottom={msg.isConsecutive ? 0 : 0}
+                  alignItems={msg.isOutgoing ? "flex-end" : "flex-start"}
+                  width="100%"
                 >
-                  <Box flexDirection="row" justifyContent="space-between" marginBottom={0}>
-                     <Text bold color={msg.isOutgoing ? "green" : "blue"}>
-                       {msg.isOutgoing ? "Me" : (msg.senderName || msg.sender)}
-                     </Text>
-                     <Box>
-                       <Text dimColor> {new Date(msg.timestamp).toLocaleTimeString()}</Text>
-                       {msg.isOutgoing && (
-                         <Text dimColor={msg.status !== "failed"} color={msg.status === "failed" ? "red" : undefined}>
-                           {msg.status === "read" ? " ✓✓" :
-                            msg.status === "delivered" ? " ✓" :
-                            msg.status === "failed" ? " ✗" : " ○"}
-                         </Text>
-                       )}
-                     </Box>
+                  <Box
+                    flexDirection="column"
+                    paddingX={1}
+                    borderStyle="round"
+                    borderColor={borderColor}
+                    width={messageBoxWidth}
+                  >
+                    {/* Header row - only show if not consecutive */}
+                    {!msg.isConsecutive && (
+                      <Box flexDirection="row" justifyContent="space-between" marginBottom={0}>
+                        <Text bold color={senderColor}>
+                          {msg.isOutgoing ? "Me" : (msg.senderName || msg.sender)}
+                        </Text>
+                        <Box>
+                          <Text color={theme.text.muted}> {formatTime(msg.timestamp)}</Text>
+                          {msg.isOutgoing && (
+                            <Text
+                              color={msg.status === "failed" ? theme.error : theme.text.muted}
+                            >
+                              {msg.status === "read" ? " \u2713\u2713" :
+                               msg.status === "delivered" ? " \u2713" :
+                               msg.status === "failed" ? " \u2717" : " \u25CB"}
+                            </Text>
+                          )}
+                        </Box>
+                      </Box>
+                    )}
+
+                    {/* Quote/Reply context */}
+                    {msg.quote && (
+                      <Box
+                        borderLeft
+                        borderColor={theme.text.muted}
+                        paddingLeft={1}
+                        marginBottom={0}
+                      >
+                        <Text color={theme.secondary}>{msg.quote.author}: </Text>
+                        <Text color={theme.text.muted}>
+                          {(msg.quote.text || "").slice(0, 40)}
+                          {(msg.quote.text || "").length > 40 ? "..." : ""}
+                        </Text>
+                      </Box>
+                    )}
+
+                    {/* Attachments */}
+                    {msg.attachments && msg.attachments.length > 0 && (
+                      <Box flexDirection="row" gap={1}>
+                        {msg.attachments.map((att, i) => (
+                          <Text key={i} color={theme.warning}>
+                            {getAttachmentLabel(att)}
+                            {att.filename ? ` ${att.filename}` : ""}
+                          </Text>
+                        ))}
+                      </Box>
+                    )}
+
+                    {/* Message content */}
+                    <Text color={theme.text.primary} wrap="wrap">{msg.content}</Text>
                   </Box>
-                  <Text>{msg.content}</Text>
                 </Box>
-              </Box>
-            ))}
+              );
+            })}
           </Box>
         );
     }
@@ -321,12 +419,20 @@ function ChatArea({
       height="100%"
       overflow="hidden"
       borderStyle="round"
-      borderColor={isChatAreaFocused ? "cyan" : "gray"}
+      borderColor={isChatAreaFocused ? theme.border.focused : theme.border.unfocused}
       paddingX={1}
     >
       {/* Header */}
-      <Box marginBottom={1}>
-        <Text bold color="cyan">
+      <Box
+        marginBottom={1}
+        borderStyle="single"
+        borderTop={false}
+        borderLeft={false}
+        borderRight={false}
+        borderBottom
+        borderColor={theme.border.unfocused}
+      >
+        <Text bold color={isChatAreaFocused ? theme.primary : theme.text.secondary}>
           {getHeader()}
         </Text>
       </Box>
