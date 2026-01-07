@@ -72,4 +72,10 @@
 - JSON-RPC over stdin/stdout via `Bun.spawn()`
 - Manage pending requests with timeout handling
 - Buffer parsing for multi-line JSON responses
-- Emit events for: `message`, `sync`, `error`, `close`
+- Emit events for: `message`, `sync`, `receipt`, `error`, `close`
+- Receipt types: `READ`, `VIEWED`, `DELIVERY` — used for message status indicators
+
+**Media/Attachments:**
+- Images rendered as ASCII art via `ink-asciify-image` (stored in DB, not re-rendered)
+- Attachments stored in dedicated `attachments` table with download status tracking
+- MIME type utilities in `src/utils/mime.ts`
