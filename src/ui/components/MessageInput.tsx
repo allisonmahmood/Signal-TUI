@@ -1,12 +1,163 @@
-import { useState, memo, useRef } from "react";
+import { useState, memo, useRef, useEffect } from "react";
 import { Box, Text, useInput } from "ink";
+import { homedir } from "node:os";
+import { existsSync } from "node:fs";
 import { theme } from "../theme.ts";
 
+export interface AttachCommandInfo {
+  isAttachCommand: boolean;
+  commandPart: string;
+  filePath: string;
+  filePathExpanded: string;
+  message: string;
+  inQuotes: boolean;
+  stage: "command" | "filepath" | "message";
+}
+
+/**
+ * Analyze /attach command for visual feedback (without file existence check)
+ */
+export function analyzeAttachCommand(text: string): AttachCommandInfo {
+  const defaultResult: AttachCommandInfo = {
+    isAttachCommand: false,
+    commandPart: "",
+    filePath: "",
+    filePathExpanded: "",
+    message: "",
+    inQuotes: false,
+    stage: "command" as const,
+  };
+
+  // Check if starting to type /attach
+  if (!text.startsWith("/")) return defaultResult;
+
+  // Partial command match
+  if ("/attach".startsWith(text) || text.startsWith("/attach")) {
+    if (!text.startsWith("/attach ")) {
+      return {
+        ...defaultResult,
+        isAttachCommand: true,
+        commandPart: text,
+        stage: "command",
+      };
+    }
+  } else {
+    return defaultResult;
+  }
+
+  // Full command with space - now parsing file path
+  const rest = text.slice(8); // After "/attach "
+
+  let filePath = "";
+  let message = "";
+  let inQuotes = false;
+  let quoteChar = "";
+
+  // Parse file path (with quote support)
+  if (rest.startsWith('"') || rest.startsWith("'")) {
+    quoteChar = rest[0];
+    const endQuote = rest.indexOf(quoteChar, 1);
+    if (endQuote > 0) {
+      filePath = rest.slice(1, endQuote);
+      message = rest.slice(endQuote + 1).trimStart();
+    } else {
+      // Still in quoted path
+      filePath = rest.slice(1);
+      inQuotes = true;
+    }
+  } else {
+    // Unquoted path
+    const spaceIndex = rest.indexOf(" ");
+    if (spaceIndex > 0) {
+      filePath = rest.slice(0, spaceIndex);
+      message = rest.slice(spaceIndex + 1);
+    } else {
+      filePath = rest;
+    }
+  }
+
+  // Expand ~ for validation
+  const filePathExpanded = filePath.startsWith("~")
+    ? filePath.replace(/^~/, homedir())
+    : filePath;
+
+  const stage = message.length > 0 ? "message" : filePath.length > 0 ? "filepath" : "command";
+
+  return {
+    isAttachCommand: true,
+    commandPart: "/attach",
+    filePath,
+    filePathExpanded,
+    message,
+    inQuotes,
+    stage,
+  };
+}
+
 interface MessageInputProps {
-  onSend: (message: string) => void;
+  onSend: (message: string, attachments?: string[]) => void;
   disabled?: boolean;
   focus?: boolean;
   onEscape?: () => void;
+}
+
+/**
+ * Parse input for slash commands like /attach
+ * @returns Parsed message and optional attachments
+ */
+export function parseInput(text: string): { message: string; attachments?: string[] } {
+  const trimmed = text.trim();
+
+  // /attach <filepath> [message]
+  // Supports quoted paths for spaces: /attach "/path/with spaces/file.png"
+  if (trimmed.startsWith("/attach ")) {
+    const rest = trimmed.slice(8).trim();
+
+    let filePath: string;
+    let message: string = "";
+
+    // Check for quoted path
+    if (rest.startsWith('"')) {
+      const endQuote = rest.indexOf('"', 1);
+      if (endQuote > 0) {
+        filePath = rest.slice(1, endQuote);
+        message = rest.slice(endQuote + 1).trim();
+      } else {
+        // No closing quote, treat everything as path
+        filePath = rest.slice(1);
+      }
+    } else if (rest.startsWith("'")) {
+      const endQuote = rest.indexOf("'", 1);
+      if (endQuote > 0) {
+        filePath = rest.slice(1, endQuote);
+        message = rest.slice(endQuote + 1).trim();
+      } else {
+        filePath = rest.slice(1);
+      }
+    } else {
+      // No quotes, split on first space
+      const spaceIndex = rest.indexOf(" ");
+      if (spaceIndex > 0) {
+        filePath = rest.slice(0, spaceIndex);
+        message = rest.slice(spaceIndex + 1).trim();
+      } else {
+        filePath = rest;
+      }
+    }
+
+    // Expand ~ to home directory
+    if (filePath.startsWith("~")) {
+      filePath = filePath.replace(/^~/, homedir());
+    }
+
+    return {
+      message,
+      attachments: [filePath],
+    };
+  }
+
+  // No command, regular message
+  return { message: trimmed };
 }
 
 function MessageInput({ onSend, disabled, focus = true, onEscape }: MessageInputProps) {
@@ -16,7 +167,37 @@ function MessageInput({ onSend, disabled, focus = true, onEscape }: MessageInput
   // State only for triggering re-renders
   const [, forceRender] = useState(0);
 
+  // Debounced file existence check
+  const [fileExists, setFileExists] = useState<boolean | null>(null);
+  const fileCheckTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   const update = () => forceRender(n => n + 1);
+
+  // Debounce file existence check to avoid sync I/O on every keystroke
+  const attachInfo = analyzeAttachCommand(valueRef.current);
+  useEffect(() => {
+    // Clear pending timeout
+    if (fileCheckTimeoutRef.current) {
+      clearTimeout(fileCheckTimeoutRef.current);
+      fileCheckTimeoutRef.current = null;
+    }
+
+    // Only check if we have a complete path (not still typing in quotes)
+    if (attachInfo.isAttachCommand && attachInfo.filePath && !attachInfo.inQuotes) {
+      // Debounce by 150ms
+      fileCheckTimeoutRef.current = setTimeout(() => {
+        setFileExists(existsSync(attachInfo.filePathExpanded));
+      }, 150);
+    } else {
+      setFileExists(null);
+    }
+
+    return () => {
+      if (fileCheckTimeoutRef.current) {
+        clearTimeout(fileCheckTimeoutRef.current);
+      }
+    };
+  }, [attachInfo.filePathExpanded, attachInfo.inQuotes, attachInfo.isAttachCommand]);
 
   // Handle all input ourselves
   useInput((input, key) => {
@@ -32,7 +213,11 @@ function MessageInput({ onSend, disabled, focus = true, onEscape }: MessageInput
     if (key.return) {
       const trimmed = valueRef.current.trim();
       if (trimmed && !disabled) {
-        onSend(trimmed);
+        const parsed = parseInput(trimmed);
+        // Only send if we have a message or attachments
+        if (parsed.message || (parsed.attachments && parsed.attachments.length > 0)) {
+          onSend(parsed.message, parsed.attachments);
+        }
         valueRef.current = "";
         cursorRef.current = 0;
         update();
@@ -136,6 +321,11 @@ function MessageInput({ onSend, disabled, focus = true, onEscape }: MessageInput
       return <Text><Text inverse> </Text><Text color={theme.text.muted}>Type a message...</Text></Text>;
     }
 
+    // Special rendering for /attach command
+    if (attachInfo.isAttachCommand && focus) {
+      return renderAttachCommand();
+    }
+
     const before = value.slice(0, cursorOffset);
     const cursor = value[cursorOffset] || " ";
     const after = value.slice(cursorOffset + 1);
@@ -146,17 +336,169 @@ function MessageInput({ onSend, disabled, focus = true, onEscape }: MessageInput
     return <Text color={theme.text.primary}>{value}</Text>;
   };
 
+  // Render /attach command with syntax highlighting and validation
+  const renderAttachCommand = () => {
+    const parts: JSX.Element[] = [];
+    const fullCommand = "/attach";
+
+    // Handle partial command typing (e.g., "/att" shows "att" bright, "ach" very dim)
+    if (value.length <= 7 && !value.includes(" ")) {
+      // Still typing the command itself
+      const typed = value; // What user has typed
+      const suggestion = fullCommand.slice(typed.length); // Rest to autocomplete
+
+      // Handle cursor position within typed text
+      if (cursorOffset < typed.length) {
+        // Cursor is within the typed portion
+        const beforeCursor = typed.slice(0, cursorOffset);
+        const cursorChar = typed[cursorOffset] || " ";
+        const afterCursor = typed.slice(cursorOffset + 1);
+
+        parts.push(
+          <Text key="typed" color={theme.secondary} bold>
+            {beforeCursor}<Text inverse>{cursorChar}</Text>{afterCursor}
+          </Text>
+        );
+      } else {
+        // Cursor is at the end of typed text
+        parts.push(
+          <Text key="typed" color={theme.secondary} bold>{typed}</Text>
+        );
+        // Cursor appears right after typed text, before suggestion
+        parts.push(<Text key="cursor" inverse> </Text>);
+      }
+
+      // Show suggestion in very dim (after cursor)
+      if (suggestion) {
+        parts.push(
+          <Text key="suggest" color={theme.text.muted} dimColor>{suggestion}</Text>
+        );
+      }
+
+      return <Text>{parts}</Text>;
+    }
+
+    // Full command typed - show it highlighted
+    parts.push(
+      <Text key="cmd" color={theme.secondary} bold>/attach</Text>
+    );
+
+    if (value.length > 7) {
+      // Space after command
+      parts.push(<Text key="sp1"> </Text>);
+
+      if (attachInfo.filePath) {
+        // File path with validation indicator (uses debounced fileExists state)
+        const pathColor = fileExists === true
+          ? theme.success
+          : fileExists === false
+            ? theme.error
+            : theme.warning;
+
+        const pathIndicator = fileExists === true
+          ? " \u2713" // checkmark
+          : fileExists === false
+            ? " \u2717" // X
+            : ""; // still typing
+
+        // Check if cursor is within the file path portion
+        const pathStart = 8; // After "/attach "
+        const pathEnd = pathStart + attachInfo.filePath.length;
+
+        if (cursorOffset >= pathStart && cursorOffset <= pathEnd) {
+          // Cursor is in file path
+          const pathCursorPos = cursorOffset - pathStart;
+          const pathBefore = attachInfo.filePath.slice(0, pathCursorPos);
+          const pathCursor = attachInfo.filePath[pathCursorPos] || " ";
+          const pathAfter = attachInfo.filePath.slice(pathCursorPos + 1);
+
+          parts.push(
+            <Text key="path" color={pathColor}>
+              {pathBefore}<Text inverse>{pathCursor}</Text>{pathAfter}
+              <Text color={fileExists === true ? theme.success : fileExists === false ? theme.error : theme.text.muted}>{pathIndicator}</Text>
+            </Text>
+          );
+        } else {
+          parts.push(
+            <Text key="path" color={pathColor}>
+              {attachInfo.filePath}
+              <Text color={fileExists === true ? theme.success : fileExists === false ? theme.error : theme.text.muted}>{pathIndicator}</Text>
+            </Text>
+          );
+        }
+
+        // Message part (if any)
+        if (attachInfo.message || attachInfo.stage === "message") {
+          parts.push(<Text key="sp2"> </Text>);
+
+          const msgStart = 8 + attachInfo.filePath.length + 1;
+          if (cursorOffset >= msgStart) {
+            const msgCursorPos = cursorOffset - msgStart;
+            const msgBefore = attachInfo.message.slice(0, msgCursorPos);
+            const msgCursor = attachInfo.message[msgCursorPos] || " ";
+            const msgAfter = attachInfo.message.slice(msgCursorPos + 1);
+
+            parts.push(
+              <Text key="msg" color={theme.text.primary}>
+                {msgBefore}<Text inverse>{msgCursor}</Text>{msgAfter}
+              </Text>
+            );
+          } else {
+            parts.push(
+              <Text key="msg" color={theme.text.primary}>{attachInfo.message}</Text>
+            );
+          }
+        } else if (cursorOffset > pathEnd) {
+          // Cursor after path, before message
+          parts.push(<Text key="cursor" inverse> </Text>);
+        }
+      } else {
+        // No file path yet, show cursor
+        parts.push(<Text key="cursor" inverse> </Text>);
+      }
+    } else if (cursorOffset >= value.length) {
+      // Cursor at end of partial command
+      parts.push(<Text key="cursor" inverse> </Text>);
+    }
+
+    return <Text>{parts}</Text>;
+  };
+
+  // Hint text for /attach command
+  const getHint = () => {
+    if (!attachInfo.isAttachCommand || !focus) return null;
+
+    if (attachInfo.stage === "command" && !value.includes(" ")) {
+      return <Text color={theme.text.muted}> (type file path next)</Text>;
+    }
+    if (attachInfo.stage === "filepath" && attachInfo.filePath && fileExists === true) {
+      return <Text color={theme.text.muted}> (press space to add caption, or Enter to send)</Text>;
+    }
+    if (attachInfo.stage === "filepath" && attachInfo.filePath && fileExists === false) {
+      return <Text color={theme.error}> (file not found)</Text>;
+    }
+    if (attachInfo.stage === "filepath" && !attachInfo.filePath) {
+      return <Text color={theme.text.muted}> (enter file path)</Text>;
+    }
+    return null;
+  };
+
   return (
     <Box
-      borderStyle="single"
-      borderTop
-      borderBottom={false}
-      borderLeft={false}
-      borderRight={false}
-      borderColor={focus ? theme.border.focused : theme.border.unfocused}
+      flexDirection="column"
     >
-      <Text color={focus ? theme.primary : theme.text.muted}>{"\u203A"} </Text>
-      {renderValue()}
+      <Box
+        borderStyle="single"
+        borderTop
+        borderBottom={false}
+        borderLeft={false}
+        borderRight={false}
+        borderColor={focus ? theme.border.focused : theme.border.unfocused}
+      >
+        <Text color={focus ? theme.primary : theme.text.muted}>{"\u203A"} </Text>
+        {renderValue()}
+        {getHint()}
+      </Box>
     </Box>
   );
 }

@@ -1,13 +1,84 @@
 import { useState, useEffect, useRef, memo, useMemo, useCallback } from "react";
 import { Box, Text, useInput, useStdout } from "ink";
+import { existsSync } from "node:fs";
+import { basename } from "node:path";
 import { SignalClient } from "../../core/SignalClient.ts";
+import { getMimeType } from "../../utils/mime.ts";
+import { generateAsciiArt } from "../../utils/asciiArt.ts";
 import type { Conversation, Account, ChatMessage, SignalEnvelope, Attachment } from "../../types/types.ts";
 import { MessageStorage } from "../../core/MessageStorage.ts";
 import { normalizeNumber } from "../../utils/phone.ts";
 import MessageInput from "./MessageInput.tsx";
 import { theme } from "../theme.ts";
 import { formatTime } from "../../utils/formatTime.ts";
-import type { FocusArea } from "../App.tsx";
+import { ASCII_ART_WIDTH, ASCII_ART_HEIGHT, type FocusArea } from "../App.tsx";
+
+// AttachmentDisplay component for rendering images, audio, and files
+interface AttachmentDisplayProps {
+  attachment: Attachment;
+  maxWidth: number;
+}
+
+function AttachmentDisplay({ attachment, maxWidth }: AttachmentDisplayProps) {
+  // Image display - show stored ASCII art
+  if (attachment.contentType.startsWith("image/")) {
+    if (attachment.asciiArt) {
+      return (
+        <Box flexDirection="column">
+          <Text>{attachment.asciiArt}</Text>
+          {attachment.caption && <Text color={theme.text.muted}>{attachment.caption}</Text>}
+          {attachment.filename && <Text color={theme.text.muted} dimColor>{attachment.filename}</Text>}
+        </Box>
+      );
+    }
+    // Fallback for old messages without ASCII art
+    return <Text color={theme.text.muted}>[Image]</Text>;
+  }
+
+  // Voice message / audio
+  if (attachment.contentType.startsWith("audio/")) {
+    // Rough duration estimate from file size (assuming ~16kbps for voice)
+    const duration = attachment.size ? `~${Math.round(attachment.size / 2000)}s` : "";
+    return (
+      <Box>
+        <Text color={theme.secondary}>
+          [VOICE] {duration} {attachment.filename || "voice message"}
+        </Text>
+        {attachment.localPath && (
+          <Text color={theme.text.muted} dimColor> {attachment.localPath}</Text>
+        )}
+      </Box>
+    );
+  }
+
+  // Video
+  if (attachment.contentType.startsWith("video/")) {
+    const sizeStr = attachment.size ? `(${Math.round(attachment.size / 1024)}KB)` : "";
+    return (
+      <Box>
+        <Text color={theme.warning}>
+          [VIDEO] {attachment.filename || "video"} {sizeStr}
+        </Text>
+        {attachment.localPath && (
+          <Text color={theme.text.muted} dimColor> {attachment.localPath}</Text>
+        )}
+      </Box>
+    );
+  }
+
+  // Generic file
+  const sizeStr = attachment.size ? `(${Math.round(attachment.size / 1024)}KB)` : "";
+  return (
+    <Box>
+      <Text color={theme.warning}>
+        [FILE] {attachment.filename || "attachment"} {sizeStr}
+      </Text>
+      {attachment.localPath && (
+        <Text color={theme.text.muted} dimColor> {attachment.localPath}</Text>
+      )}
+    </Box>
+  );
+}
 
 // Extended message type with grouping info
 interface DisplayMessage extends ChatMessage {
@@ -20,16 +91,28 @@ interface DisplayMessage extends ChatMessage {
 }
 
 // Estimate how many terminal rows a message will take
-function estimateMessageHeight(content: string, availableWidth: number): number {
+function estimateMessageHeight(msg: ChatMessage | DisplayMessage, availableWidth: number): number {
   // Base: 2 (borders) + 1 (header row) = 3 rows minimum
   const BASE_HEIGHT = 3;
 
   // Estimate content lines based on character count and width
   // Message box is 80% of chat area, minus padding and borders (~8 chars)
   const contentWidth = Math.max(20, availableWidth - 8);
-  const contentLines = Math.max(1, Math.ceil(content.length / contentWidth));
+  const contentLines = Math.max(1, Math.ceil((msg.content || "").length / contentWidth));
 
-  return BASE_HEIGHT + contentLines;
+  // Account for attachments
+  let attachmentHeight = 0;
+  if (msg.attachments) {
+    for (const att of msg.attachments) {
+      if (att.contentType.startsWith("image/")) {
+        attachmentHeight += 22; // Image height (20) + caption/filename
+      } else {
+        attachmentHeight += 2; // Text-based attachment
+      }
+    }
+  }
+
+  return BASE_HEIGHT + contentLines + attachmentHeight;
 }
 
 interface ChatAreaProps {
@@ -56,6 +139,7 @@ function ChatArea({
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [scrollOffset, setScrollOffset] = useState(0);
   const [pendingG, setPendingG] = useState(false);
+  const [sendError, setSendError] = useState<string | null>(null);
   const { stdout } = useStdout();
 
   // Calculate available space for messages
@@ -84,7 +168,7 @@ function ChatArea({
     while (startIndex >= 0 && startIndex < messages.length) {
       const msg = messages[startIndex];
       if (!msg) break;
-      const msgHeight = estimateMessageHeight(msg.content, chatAreaWidth);
+      const msgHeight = estimateMessageHeight(msg, chatAreaWidth);
       if (totalHeight + msgHeight > availableRows && startIndex < endIndex - 1) {
         startIndex++; // This message won't fit, go back one
         break;
@@ -212,17 +296,56 @@ function ChatArea({
     }
   }, { isActive: focusArea === "chat" });
 
-  const handleSendMessage = useCallback(async (text: string) => {
+  const handleSendMessage = useCallback(async (text: string, attachments?: string[]) => {
     if (!client || !selectedConversation) return;
+
+    // Clear any previous error
+    setSendError(null);
+
+    // Validate attachment paths exist
+    if (attachments && attachments.length > 0) {
+      for (const path of attachments) {
+        if (!existsSync(path)) {
+          const errorMsg = `File not found: ${path}`;
+          setSendError(errorMsg);
+          // Auto-clear error after 5 seconds
+          setTimeout(() => setSendError(null), 5000);
+          return;
+        }
+      }
+    }
+
+    // Build attachment metadata for optimistic message (with ASCII art for images)
+    let attachmentMeta: Attachment[] | undefined;
+    if (attachments && attachments.length > 0) {
+      attachmentMeta = await Promise.all(attachments.map(async (path) => {
+        const contentType = getMimeType(path);
+        let asciiArt: string | undefined;
+        if (contentType.startsWith("image/")) {
+          asciiArt = await generateAsciiArt(path, ASCII_ART_WIDTH, ASCII_ART_HEIGHT);
+        }
+        return {
+          contentType,
+          filename: basename(path),
+          localPath: path,
+          downloadStatus: "completed" as const,
+          asciiArt,
+        };
+      }));
+    }
+
+    // Determine content for display
+    const displayContent = text || (attachments?.length ? "[Attachment]" : "");
 
     // Create optimistic message outside try block so it's accessible in catch
     const optimisticMessage: ChatMessage = {
       id: Date.now().toString(),
       sender: "Me",
-      content: text,
+      content: displayContent,
       timestamp: Date.now(),
       isOutgoing: true,
-      status: "sent"
+      status: "sent",
+      attachments: attachmentMeta,
     };
 
     try {
@@ -233,15 +356,18 @@ function ChatArea({
 
       const timestamp = await client.sendMessage(
         selectedConversation.id,
-        text,
-        selectedConversation.type === "group"
+        text || undefined,
+        {
+          isGroup: selectedConversation.type === "group",
+          attachments,
+        }
       );
 
       // Replace optimistic message with real one
       const realMessage: ChatMessage = {
         ...optimisticMessage,
         id: timestamp.toString(),
-        timestamp: timestamp
+        timestamp: timestamp,
       };
 
       if (storage) {
@@ -348,6 +474,7 @@ function ChatArea({
                     borderStyle="round"
                     borderColor={borderColor}
                     width={messageBoxWidth}
+                    overflow="hidden"
                   >
                     {/* Header row - only show if not consecutive */}
                     {!msg.isConsecutive && (
@@ -388,12 +515,13 @@ function ChatArea({
 
                     {/* Attachments */}
                     {msg.attachments && msg.attachments.length > 0 && (
-                      <Box flexDirection="row" gap={1}>
+                      <Box flexDirection="column" gap={0}>
                         {msg.attachments.map((att, i) => (
-                          <Text key={i} color={theme.warning}>
-                            {getAttachmentLabel(att)}
-                            {att.filename ? ` ${att.filename}` : ""}
-                          </Text>
+                          <AttachmentDisplay
+                            key={att.id || i}
+                            attachment={att}
+                            maxWidth={messageBoxWidth - 4}
+                          />
                         ))}
                       </Box>
                     )}
@@ -440,9 +568,16 @@ function ChatArea({
       {/* Content */}
       {getContent()}
 
+      {/* Error display */}
+      {sendError && (
+        <Box marginTop={1}>
+          <Text color={theme.error}>{theme.symbols.error || "✗"} {sendError}</Text>
+        </Box>
+      )}
+
       {/* Input area */}
       {currentView === "chat" && selectedConversation && (
-        <Box marginTop={1}>
+        <Box marginTop={sendError ? 0 : 1}>
           <MessageInput onSend={handleSendMessage} focus={focusArea === "input"} onEscape={cycleFocus} />
         </Box>
       )}

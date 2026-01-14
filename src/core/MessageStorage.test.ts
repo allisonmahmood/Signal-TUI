@@ -442,4 +442,395 @@ describe("MessageStorage", () => {
         storage.close();
         await unlink(dbPath);
     });
+
+    // =====================================================
+    // Attachment storage tests
+    // =====================================================
+
+    test("should save and retrieve message with single attachment", async () => {
+        const msg = {
+            id: "msg-with-attachment",
+            sender: "Me",
+            content: "Check this out",
+            timestamp: Date.now(),
+            isOutgoing: true,
+            attachments: [{
+                id: "att-1",
+                contentType: "image/jpeg",
+                filename: "photo.jpg",
+                size: 12345,
+                width: 800,
+                height: 600
+            }]
+        };
+        const conversationId = "+1234567890";
+
+        storage.addMessage(msg, conversationId);
+        const retrieved = storage.getMessages(conversationId);
+
+        expect(retrieved.length).toBe(1);
+        expect(retrieved[0]!.attachments).toBeDefined();
+        expect(retrieved[0]!.attachments!.length).toBe(1);
+        expect(retrieved[0]!.attachments![0]!.contentType).toBe("image/jpeg");
+        expect(retrieved[0]!.attachments![0]!.filename).toBe("photo.jpg");
+        expect(retrieved[0]!.attachments![0]!.size).toBe(12345);
+        expect(retrieved[0]!.attachments![0]!.width).toBe(800);
+        expect(retrieved[0]!.attachments![0]!.height).toBe(600);
+
+        storage.close();
+        await unlink(dbPath);
+    });
+
+    test("should save and retrieve message with multiple attachments", async () => {
+        const msg = {
+            id: "msg-multi-attach",
+            sender: "Me",
+            content: "Multiple files",
+            timestamp: Date.now(),
+            isOutgoing: true,
+            attachments: [
+                { id: "att-1", contentType: "image/png", filename: "image1.png" },
+                { id: "att-2", contentType: "image/jpeg", filename: "image2.jpg" },
+                { id: "att-3", contentType: "audio/mp3", filename: "voice.mp3" }
+            ]
+        };
+        const conversationId = "+1234567890";
+
+        storage.addMessage(msg, conversationId);
+        const retrieved = storage.getMessages(conversationId);
+
+        expect(retrieved[0]!.attachments!.length).toBe(3);
+        expect(retrieved[0]!.attachments![0]!.filename).toBe("image1.png");
+        expect(retrieved[0]!.attachments![1]!.filename).toBe("image2.jpg");
+        expect(retrieved[0]!.attachments![2]!.filename).toBe("voice.mp3");
+
+        storage.close();
+        await unlink(dbPath);
+    });
+
+    test("should save and retrieve attachment with asciiArt field", async () => {
+        const asciiArt = "###\n###\n###";
+        const msg = {
+            id: "msg-ascii-art",
+            sender: "Me",
+            content: "",
+            timestamp: Date.now(),
+            isOutgoing: true,
+            attachments: [{
+                id: "att-ascii",
+                contentType: "image/png",
+                filename: "photo.png",
+                asciiArt: asciiArt
+            }]
+        };
+        const conversationId = "+1234567890";
+
+        storage.addMessage(msg, conversationId);
+        const retrieved = storage.getMessages(conversationId);
+
+        expect(retrieved[0]!.attachments![0]!.asciiArt).toBe(asciiArt);
+
+        storage.close();
+        await unlink(dbPath);
+    });
+
+    test("should save attachment with downloadStatus and localPath", async () => {
+        const msg = {
+            id: "msg-download-status",
+            sender: "+1234567890",
+            content: "",
+            timestamp: Date.now(),
+            isOutgoing: false,
+            attachments: [{
+                id: "att-status",
+                contentType: "image/jpeg",
+                filename: "received.jpg",
+                downloadStatus: "completed" as const,
+                localPath: "/path/to/local/file.jpg"
+            }]
+        };
+        const conversationId = "+1234567890";
+
+        storage.addMessage(msg, conversationId);
+        const retrieved = storage.getMessages(conversationId);
+
+        expect(retrieved[0]!.attachments![0]!.downloadStatus).toBe("completed");
+        expect(retrieved[0]!.attachments![0]!.localPath).toBe("/path/to/local/file.jpg");
+
+        storage.close();
+        await unlink(dbPath);
+    });
+
+    test("should handle message without attachments (undefined)", async () => {
+        const msg = {
+            id: "msg-no-attach",
+            sender: "Me",
+            content: "Just text",
+            timestamp: Date.now(),
+            isOutgoing: true
+        };
+        const conversationId = "+1234567890";
+
+        storage.addMessage(msg, conversationId);
+        const retrieved = storage.getMessages(conversationId);
+
+        expect(retrieved[0]!.attachments).toBeUndefined();
+
+        storage.close();
+        await unlink(dbPath);
+    });
+
+    test("should handle attachment with only required fields", async () => {
+        const msg = {
+            id: "msg-minimal-attach",
+            sender: "Me",
+            content: "",
+            timestamp: Date.now(),
+            isOutgoing: true,
+            attachments: [{
+                contentType: "application/octet-stream"
+                // No id, filename, size, etc.
+            }]
+        };
+        const conversationId = "+1234567890";
+
+        storage.addMessage(msg, conversationId);
+        const retrieved = storage.getMessages(conversationId);
+
+        expect(retrieved[0]!.attachments).toBeDefined();
+        expect(retrieved[0]!.attachments![0]!.contentType).toBe("application/octet-stream");
+        expect(retrieved[0]!.attachments![0]!.filename).toBeUndefined();
+        expect(retrieved[0]!.attachments![0]!.size).toBeUndefined();
+
+        storage.close();
+        await unlink(dbPath);
+    });
+
+    // =====================================================
+    // updateAttachmentStatus tests
+    // =====================================================
+
+    test("updateAttachmentStatus should update status to downloading", async () => {
+        const msg = {
+            id: "msg-att-update",
+            sender: "+1234567890",
+            content: "",
+            timestamp: Date.now(),
+            isOutgoing: false,
+            attachments: [{
+                id: "att-to-update",
+                contentType: "image/jpeg",
+                downloadStatus: "pending" as const
+            }]
+        };
+        const conversationId = "+1234567890";
+
+        storage.addMessage(msg, conversationId);
+        storage.updateAttachmentStatus("att-to-update", "downloading");
+
+        const retrieved = storage.getMessages(conversationId);
+        expect(retrieved[0]!.attachments![0]!.downloadStatus).toBe("downloading");
+
+        storage.close();
+        await unlink(dbPath);
+    });
+
+    test("updateAttachmentStatus should update status to completed with localPath", async () => {
+        const msg = {
+            id: "msg-att-complete",
+            sender: "+1234567890",
+            content: "",
+            timestamp: Date.now(),
+            isOutgoing: false,
+            attachments: [{
+                id: "att-completing",
+                contentType: "image/jpeg",
+                downloadStatus: "downloading" as const
+            }]
+        };
+        const conversationId = "+1234567890";
+
+        storage.addMessage(msg, conversationId);
+        storage.updateAttachmentStatus("att-completing", "completed", "/downloads/photo.jpg");
+
+        const retrieved = storage.getMessages(conversationId);
+        expect(retrieved[0]!.attachments![0]!.downloadStatus).toBe("completed");
+        expect(retrieved[0]!.attachments![0]!.localPath).toBe("/downloads/photo.jpg");
+
+        storage.close();
+        await unlink(dbPath);
+    });
+
+    test("updateAttachmentStatus should update status to failed", async () => {
+        const msg = {
+            id: "msg-att-fail",
+            sender: "+1234567890",
+            content: "",
+            timestamp: Date.now(),
+            isOutgoing: false,
+            attachments: [{
+                id: "att-failing",
+                contentType: "image/jpeg",
+                downloadStatus: "downloading" as const
+            }]
+        };
+        const conversationId = "+1234567890";
+
+        storage.addMessage(msg, conversationId);
+        storage.updateAttachmentStatus("att-failing", "failed");
+
+        const retrieved = storage.getMessages(conversationId);
+        expect(retrieved[0]!.attachments![0]!.downloadStatus).toBe("failed");
+
+        storage.close();
+        await unlink(dbPath);
+    });
+
+    test("updateAttachmentStatus should emit attachment-updated event", async () => {
+        const msg = {
+            id: "msg-att-event",
+            sender: "+1234567890",
+            content: "",
+            timestamp: Date.now(),
+            isOutgoing: false,
+            attachments: [{
+                id: "att-event-test",
+                contentType: "image/jpeg",
+                downloadStatus: "pending" as const
+            }]
+        };
+        const conversationId = "+1234567890";
+
+        storage.addMessage(msg, conversationId);
+
+        const eventPromise = new Promise<{ id: string; status: string; path?: string }>((resolve) => {
+            storage.on("attachment-updated", (id, status, path) => {
+                resolve({ id, status, path });
+            });
+        });
+
+        storage.updateAttachmentStatus("att-event-test", "completed", "/path/to/file.jpg");
+
+        const result = await eventPromise;
+        expect(result.id).toBe("att-event-test");
+        expect(result.status).toBe("completed");
+        expect(result.path).toBe("/path/to/file.jpg");
+
+        storage.close();
+        await unlink(dbPath);
+    });
+
+    test("updateAttachmentStatus should preserve existing localPath if not provided", async () => {
+        const msg = {
+            id: "msg-att-preserve-path",
+            sender: "+1234567890",
+            content: "",
+            timestamp: Date.now(),
+            isOutgoing: false,
+            attachments: [{
+                id: "att-preserve",
+                contentType: "image/jpeg",
+                downloadStatus: "completed" as const,
+                localPath: "/existing/path.jpg"
+            }]
+        };
+        const conversationId = "+1234567890";
+
+        storage.addMessage(msg, conversationId);
+        // Update status without providing localPath
+        storage.updateAttachmentStatus("att-preserve", "failed");
+
+        const retrieved = storage.getMessages(conversationId);
+        expect(retrieved[0]!.attachments![0]!.downloadStatus).toBe("failed");
+        expect(retrieved[0]!.attachments![0]!.localPath).toBe("/existing/path.jpg");
+
+        storage.close();
+        await unlink(dbPath);
+    });
+
+    // =====================================================
+    // replaceMessage with attachments tests
+    // =====================================================
+
+    test("replaceMessage should handle old message with attachments", async () => {
+        const conversationId = "+1234567890";
+        const oldId = "optimistic-with-attach";
+        const oldMessage = {
+            id: oldId,
+            sender: "Me",
+            content: "Sending image...",
+            timestamp: Date.now(),
+            isOutgoing: true,
+            attachments: [{
+                id: "temp-att",
+                contentType: "image/jpeg",
+                filename: "photo.jpg"
+            }]
+        };
+
+        storage.addMessage(oldMessage, conversationId);
+
+        const newMessage = {
+            id: "confirmed-with-attach",
+            sender: "Me",
+            content: "Sending image...",
+            timestamp: Date.now() + 100,
+            isOutgoing: true,
+            attachments: [{
+                id: "confirmed-att",
+                contentType: "image/jpeg",
+                filename: "photo.jpg",
+                downloadStatus: "completed" as const
+            }]
+        };
+
+        storage.replaceMessage(oldId, newMessage, conversationId);
+
+        const messages = storage.getMessages(conversationId);
+        expect(messages.length).toBe(1);
+        expect(messages[0]!.id).toBe("confirmed-with-attach");
+        expect(messages[0]!.attachments![0]!.id).toBe("confirmed-att");
+        expect(messages[0]!.attachments![0]!.downloadStatus).toBe("completed");
+
+        storage.close();
+        await unlink(dbPath);
+    });
+
+    test("replaceMessage should remove old attachments when message is deleted", async () => {
+        const conversationId = "+1234567890";
+        const oldId = "msg-to-replace";
+        const oldMessage = {
+            id: oldId,
+            sender: "Me",
+            content: "Old message",
+            timestamp: Date.now(),
+            isOutgoing: true,
+            attachments: [{
+                id: "old-att-1",
+                contentType: "image/png",
+                filename: "old.png"
+            }]
+        };
+
+        storage.addMessage(oldMessage, conversationId);
+
+        const newMessage = {
+            id: "new-msg",
+            sender: "Me",
+            content: "New message",
+            timestamp: Date.now() + 100,
+            isOutgoing: true
+            // No attachments
+        };
+
+        storage.replaceMessage(oldId, newMessage, conversationId);
+
+        const messages = storage.getMessages(conversationId);
+        expect(messages.length).toBe(1);
+        expect(messages[0]!.id).toBe("new-msg");
+        expect(messages[0]!.attachments).toBeUndefined();
+
+        storage.close();
+        await unlink(dbPath);
+    });
 });

@@ -57,6 +57,7 @@ export interface SyncMessage {
     message?: string;
     expiresInSeconds?: number;
     groupInfo?: GroupInfo;
+    attachments?: Attachment[];
   };
   readMessages?: ReadMessage[];
 }
@@ -100,6 +101,11 @@ export interface Attachment {
   width?: number;
   height?: number;
   caption?: string;
+  // Local storage fields
+  localPath?: string;
+  downloadStatus?: "pending" | "downloading" | "completed" | "failed";
+  // Pre-generated ASCII art for images
+  asciiArt?: string;
 }
 
 export interface ReadMessage {
@@ -210,5 +216,6 @@ export interface ChatMessage {
   timestamp: number;
   isOutgoing: boolean;  // true if sent by us
   status?: "sent" | "delivered" | "read" | "failed";
+  attachments?: Attachment[];
 }
 
