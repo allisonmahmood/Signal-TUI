@@ -8,7 +8,7 @@ import KeybindBar from "./KeybindBar.tsx";
 import { SignalClient } from "../../core/SignalClient.ts";
 import type { Account, Conversation } from "../../types/types.ts";
 import { MessageStorage } from "../../core/MessageStorage.ts";
-import type { FocusArea } from "../App.tsx";
+import type { FocusArea } from "../state/navigation.ts";
 
 interface LayoutProps {
   currentView: "loading" | "onboarding" | "chat";
@@ -16,16 +16,13 @@ interface LayoutProps {
   linkStatus?: LinkStatus;
   errorMessage?: string;
   accounts?: Account[];
-  onLinkNewDevice?: () => void;
   client?: SignalClient | null;
   selectedConversation?: Conversation | null;
   onSelectConversation?: (conversation: Conversation) => void;
   storage?: MessageStorage;
   focusArea?: FocusArea;
-  setFocusArea?: (area: FocusArea) => void;
   cycleFocus?: () => void;
   connectionStatus?: ConnectionStatus;
-  conversationCount?: number;
 }
 
 function Layout({
@@ -34,21 +31,18 @@ function Layout({
   linkStatus,
   errorMessage,
   accounts,
-  onLinkNewDevice,
   client,
   selectedConversation,
   onSelectConversation,
   storage,
   focusArea,
-  setFocusArea,
   cycleFocus,
   connectionStatus = "disconnected",
-  conversationCount: initialCount = 0,
 }: LayoutProps) {
   const { stdout } = useStdout();
   const terminalHeight = stdout?.rows || 24;
   const [searchMode, setSearchMode] = useState(false);
-  const [conversationCount, setConversationCount] = useState(initialCount);
+  const [conversationCount, setConversationCount] = useState(0);
 
   // During onboarding, show full-width Onboarding component
   if (currentView === "onboarding" || currentView === "loading") {
@@ -73,14 +67,11 @@ function Layout({
       <Box flexDirection="row" width="100%" height={mainContentHeight} overflow="hidden">
         <Sidebar
           currentView={currentView}
-          accounts={accounts}
-          onLinkNewDevice={onLinkNewDevice}
           client={client}
           selectedConversation={selectedConversation}
           onSelectConversation={onSelectConversation}
           storage={storage}
           focusArea={focusArea}
-          setFocusArea={setFocusArea}
           searchMode={searchMode}
           setSearchMode={setSearchMode}
           onConversationCountChange={setConversationCount}
@@ -90,10 +81,8 @@ function Layout({
           currentView={currentView}
           client={client}
           selectedConversation={selectedConversation}
-          currentAccount={accounts?.[0]}
           storage={storage}
           focusArea={focusArea}
-          setFocusArea={setFocusArea}
           cycleFocus={cycleFocus}
         />
       </Box>

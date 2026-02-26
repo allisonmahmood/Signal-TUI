@@ -1,6 +1,5 @@
 import type { Subprocess } from "bun";
-import { EventEmitter } from "events";
-import { appendFileSync } from "node:fs";
+import { EventEmitter } from "node:events";
 import type {
   JsonRpcRequest,
   JsonRpcResponse,
@@ -302,7 +301,7 @@ export class SignalClient extends EventEmitter {
           console.error("[signal-cli stderr]:", text.trim());
         }
       }
-    } catch (error) {
+    } catch (_error) {
       // Stderr read errors are non-fatal
     }
   }
@@ -345,7 +344,7 @@ export class SignalClient extends EventEmitter {
       try {
         const json = JSON.parse(line);
         this.handleJsonMessage(json);
-      } catch (error) {
+      } catch (_error) {
         // Log parse errors but don't crash
         console.error("[SignalClient] Failed to parse JSON:", line);
       }

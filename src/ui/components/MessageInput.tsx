@@ -1,4 +1,5 @@
 import { useState, memo, useRef, useEffect } from "react";
+import type { ReactElement } from "react";
 import { Box, Text, useInput } from "ink";
 import { homedir } from "node:os";
 import { existsSync } from "node:fs";
@@ -51,11 +52,9 @@ export function analyzeAttachCommand(text: string): AttachCommandInfo {
   let filePath = "";
   let message = "";
   let inQuotes = false;
-  let quoteChar = "";
-
   // Parse file path (with quote support)
   if (rest.startsWith('"') || rest.startsWith("'")) {
-    quoteChar = rest[0];
+    const quoteChar = rest[0]!;
     const endQuote = rest.indexOf(quoteChar, 1);
     if (endQuote > 0) {
       filePath = rest.slice(1, endQuote);
@@ -197,7 +196,7 @@ function MessageInput({ onSend, disabled, focus = true, onEscape }: MessageInput
         clearTimeout(fileCheckTimeoutRef.current);
       }
     };
-  }, [attachInfo.filePathExpanded, attachInfo.inQuotes, attachInfo.isAttachCommand]);
+  }, [attachInfo.filePath, attachInfo.filePathExpanded, attachInfo.inQuotes, attachInfo.isAttachCommand]);
 
   // Handle all input ourselves
   useInput((input, key) => {
@@ -338,7 +337,7 @@ function MessageInput({ onSend, disabled, focus = true, onEscape }: MessageInput
 
   // Render /attach command with syntax highlighting and validation
   const renderAttachCommand = () => {
-    const parts: JSX.Element[] = [];
+    const parts: ReactElement[] = [];
     const fullCommand = "/attach";
 
     // Handle partial command typing (e.g., "/att" shows "att" bright, "ach" very dim)

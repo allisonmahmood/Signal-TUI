@@ -21,7 +21,6 @@ const COMMON_SIGNAL_CLI_PATHS = [
  */
 export function loadConfig(): Config {
   try {
-    const file = Bun.file(CONFIG_PATH);
     if (!existsSync(CONFIG_PATH)) {
       return {};
     }

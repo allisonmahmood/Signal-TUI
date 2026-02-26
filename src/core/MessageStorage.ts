@@ -57,10 +57,10 @@ export class MessageStorage extends EventEmitter {
         }
       }
 
-      this.db!.query(`
+    this.db!.query(`
       CREATE INDEX IF NOT EXISTS idx_conversation_timestamp
       ON messages(conversation_id, timestamp);
-    `);
+    `).run();
 
     // Create attachments table
     this.db!.query(`
@@ -142,8 +142,7 @@ export class MessageStorage extends EventEmitter {
         )
       `);
 
-      for (let i = 0; i < msg.attachments.length; i++) {
-        const att = msg.attachments[i];
+      for (const [i, att] of msg.attachments.entries()) {
         attachmentQuery.run({
           $id: att.id || `${msg.id}-${i}`,
           $message_id: msg.id,

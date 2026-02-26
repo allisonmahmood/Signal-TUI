@@ -1,25 +1,24 @@
-import { useState, useEffect, useRef, memo, useMemo, useCallback } from "react";
+import { useState, useEffect, memo, useMemo, useCallback } from "react";
 import { Box, Text, useInput, useStdout } from "ink";
 import { existsSync } from "node:fs";
 import { basename } from "node:path";
 import { SignalClient } from "../../core/SignalClient.ts";
 import { getMimeType } from "../../utils/mime.ts";
 import { generateAsciiArt } from "../../utils/asciiArt.ts";
-import type { Conversation, Account, ChatMessage, SignalEnvelope, Attachment } from "../../types/types.ts";
+import type { Conversation, ChatMessage, Attachment } from "../../types/types.ts";
 import { MessageStorage } from "../../core/MessageStorage.ts";
-import { normalizeNumber } from "../../utils/phone.ts";
 import MessageInput from "./MessageInput.tsx";
 import { theme } from "../theme.ts";
 import { formatTime } from "../../utils/formatTime.ts";
-import { ASCII_ART_WIDTH, ASCII_ART_HEIGHT, type FocusArea } from "../App.tsx";
+import { ASCII_ART_WIDTH, ASCII_ART_HEIGHT } from "../constants.ts";
+import { updateChatScrollOffset, type FocusArea } from "../state/navigation.ts";
 
 // AttachmentDisplay component for rendering images, audio, and files
 interface AttachmentDisplayProps {
   attachment: Attachment;
-  maxWidth: number;
 }
 
-function AttachmentDisplay({ attachment, maxWidth }: AttachmentDisplayProps) {
+function AttachmentDisplay({ attachment }: AttachmentDisplayProps) {
   // Image display - show stored ASCII art
   if (attachment.contentType.startsWith("image/")) {
     if (attachment.asciiArt) {
@@ -119,10 +118,8 @@ interface ChatAreaProps {
   currentView: "loading" | "onboarding" | "chat";
   client?: SignalClient | null;
   selectedConversation?: Conversation | null;
-  currentAccount?: Account | null;
   storage?: MessageStorage;
   focusArea?: FocusArea;
-  setFocusArea?: (area: FocusArea) => void;
   cycleFocus?: () => void;
 }
 
@@ -130,10 +127,8 @@ function ChatArea({
   currentView,
   client,
   selectedConversation,
-  currentAccount,
   storage,
   focusArea,
-  setFocusArea,
   cycleFocus,
 }: ChatAreaProps) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -141,6 +136,7 @@ function ChatArea({
   const [pendingG, setPendingG] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
   const { stdout } = useStdout();
+  const selectedConversationId = selectedConversation?.id;
 
   // Calculate available space for messages
   // Total rows - Header(~2) - Input(~2) - borders/margins(~6) = ~10 overhead
@@ -197,11 +193,11 @@ function ChatArea({
     setScrollOffset(0);
     
     // Load history from storage
-    if (storage && selectedConversation) {
-        const history = storage.getMessages(selectedConversation.id, 50);
+    if (storage && selectedConversationId) {
+        const history = storage.getMessages(selectedConversationId, 50);
         setMessages(history);
     }
-  }, [selectedConversation?.id, storage]);
+  }, [selectedConversationId, storage]);
 
   // Handle incoming messages from STORAGE (single source of truth)
   useEffect(() => {
@@ -253,39 +249,67 @@ function ChatArea({
     if (currentView !== "chat") return;
 
     const visibleCount = visibleMessages.length;
-    const maxOffset = Math.max(0, messages.length - 1);
-
-    const scrollUp = () => setScrollOffset(prev => Math.min(maxOffset, prev + 1));
-    const scrollDown = () => setScrollOffset(prev => Math.max(0, prev - 1));
 
     // PageUp - scroll up by roughly one screen of messages
     if (key.pageUp) {
-      setScrollOffset(prev => Math.min(maxOffset, prev + Math.max(1, visibleCount - 1)));
+      setScrollOffset(prev => updateChatScrollOffset(
+        { scrollOffset: prev, messageCount: messages.length, visibleCount },
+        "pageUp"
+      ));
     }
 
     // PageDown - scroll down by roughly one screen of messages
     if (key.pageDown) {
-      setScrollOffset(prev => Math.max(0, prev - Math.max(1, visibleCount - 1)));
+      setScrollOffset(prev => updateChatScrollOffset(
+        { scrollOffset: prev, messageCount: messages.length, visibleCount },
+        "pageDown"
+      ));
     }
 
     // Arrow keys
-    if (key.upArrow) scrollUp();
-    if (key.downArrow) scrollDown();
+    if (key.upArrow) {
+      setScrollOffset(prev => updateChatScrollOffset(
+        { scrollOffset: prev, messageCount: messages.length, visibleCount },
+        "up"
+      ));
+    }
+    if (key.downArrow) {
+      setScrollOffset(prev => updateChatScrollOffset(
+        { scrollOffset: prev, messageCount: messages.length, visibleCount },
+        "down"
+      ));
+    }
 
     // Vim keys: k for up, j for down
-    if (input === "k") scrollUp();
-    if (input === "j") scrollDown();
+    if (input === "k") {
+      setScrollOffset(prev => updateChatScrollOffset(
+        { scrollOffset: prev, messageCount: messages.length, visibleCount },
+        "up"
+      ));
+    }
+    if (input === "j") {
+      setScrollOffset(prev => updateChatScrollOffset(
+        { scrollOffset: prev, messageCount: messages.length, visibleCount },
+        "down"
+      ));
+    }
 
     // G for bottom (newest messages)
     if (input === "G") {
-      setScrollOffset(0);
+      setScrollOffset(prev => updateChatScrollOffset(
+        { scrollOffset: prev, messageCount: messages.length, visibleCount },
+        "newest"
+      ));
       setPendingG(false);
     }
 
     // gg for top (oldest messages)
     if (input === "g") {
       if (pendingG) {
-        setScrollOffset(maxOffset);
+        setScrollOffset(prev => updateChatScrollOffset(
+          { scrollOffset: prev, messageCount: messages.length, visibleCount },
+          "oldest"
+        ));
         setPendingG(false);
       } else {
         setPendingG(true);
@@ -373,7 +397,7 @@ function ChatArea({
       if (storage) {
         storage.replaceMessage(optimisticMessage.id, realMessage, selectedConversation.id);
       }
-    } catch (error) {
+    } catch (_error) {
       // Mark the optimistic message as failed
       if (storage) {
         storage.updateMessageStatus(optimisticMessage.timestamp, "failed");
@@ -387,21 +411,14 @@ function ChatArea({
         return "Loading...";
       case "onboarding":
         return "Welcome to Signal TUI";
-      case "chat":
+      case "chat": {
         const name = selectedConversation?.displayName ?? "Chat";
         const scrollInfo = scrollOffset > 0
           ? ` (${scrollOffset} up)`
           : "";
         return name + scrollInfo;
+      }
     }
-  };
-
-  // Helper for attachment display
-  const getAttachmentLabel = (att: Attachment): string => {
-    if (att.contentType.startsWith("image/")) return "[IMG]";
-    if (att.contentType.startsWith("video/")) return "[VIDEO]";
-    if (att.contentType.startsWith("audio/")) return "[VOICE]";
-    return "[FILE]";
   };
 
   const getContent = () => {
@@ -520,7 +537,6 @@ function ChatArea({
                           <AttachmentDisplay
                             key={att.id || i}
                             attachment={att}
-                            maxWidth={messageBoxWidth - 4}
                           />
                         ))}
                       </Box>
@@ -571,7 +587,7 @@ function ChatArea({
       {/* Error display */}
       {sendError && (
         <Box marginTop={1}>
-          <Text color={theme.error}>{theme.symbols.error || "✗"} {sendError}</Text>
+          <Text color={theme.error}>{"\u2717"} {sendError}</Text>
         </Box>
       )}
 

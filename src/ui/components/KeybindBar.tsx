@@ -1,7 +1,7 @@
 import { memo } from "react";
 import { Box, Text } from "ink";
 import { theme } from "../theme.ts";
-import type { FocusArea } from "../App.tsx";
+import type { FocusArea } from "../state/navigation.ts";
 
 interface Keybind {
   key: string;

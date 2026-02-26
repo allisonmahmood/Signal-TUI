@@ -1,4 +1,5 @@
-import { describe, expect, test, afterAll, beforeEach } from "bun:test";
+import { describe, expect, test, beforeEach } from "bun:test";
+import { Database } from "bun:sqlite";
 import { MessageStorage } from "./MessageStorage";
 import { unlink } from "node:fs/promises";
 import { join } from "node:path";
@@ -17,14 +18,26 @@ describe("MessageStorage", () => {
         await storage.init();
     });
 
-    afterAll(async () => {
-        // Cleanup happens in individual tests usually, but here we can try to be clean
-    });
-
     test("should initialize database tables", async () => {
         // Just by invoking init() in beforeEach, we are testing it doesn't crash
         expect(storage).toBeDefined();
         storage.close();
+        await unlink(dbPath);
+    });
+
+    test("should create conversation recency index", async () => {
+        storage.close();
+
+        const db = new Database(dbPath);
+        const index = db
+            .query(
+                "SELECT name FROM sqlite_master WHERE type = 'index' AND name = $name"
+            )
+            .get({ $name: "idx_conversation_timestamp" }) as { name: string } | null;
+
+        expect(index?.name).toBe("idx_conversation_timestamp");
+
+        db.close();
         await unlink(dbPath);
     });
 

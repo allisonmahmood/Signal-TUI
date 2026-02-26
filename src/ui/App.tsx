@@ -11,10 +11,8 @@ import type { Account, Conversation, SignalEnvelope, ChatMessage, Attachment } f
 import { MessageStorage } from "../core/MessageStorage.ts";
 import { normalizeNumber } from "../utils/phone.ts";
 import { generateAsciiArt } from "../utils/asciiArt.ts";
-
-// ASCII art dimensions for terminal display
-export const ASCII_ART_WIDTH = 40;
-export const ASCII_ART_HEIGHT = 20;
+import { getNextFocusArea, type FocusArea } from "./state/navigation.ts";
+import { ASCII_ART_WIDTH, ASCII_ART_HEIGHT } from "./constants.ts";
 
 // Get signal-cli's attachment storage directory
 function getSignalCliAttachmentsDir(): string {
@@ -52,7 +50,6 @@ const debugLog = DEBUG
   : () => {};
 
 export type ViewState = "loading" | "onboarding" | "chat";
-export type FocusArea = "sidebar" | "chat" | "input";
 
 export default function App() {
   const { exit } = useApp();
@@ -67,7 +64,6 @@ export default function App() {
   const [storageReady, setStorageReady] = useState(false);
   const [focusArea, setFocusArea] = useState<FocusArea>("sidebar");
   const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>("disconnected");
-  const [conversationCount, setConversationCount] = useState(0);
 
   // Track if we're intentionally stopping (for graceful shutdown)
   const isStoppingRef = useRef(false);
@@ -78,11 +74,7 @@ export default function App() {
 
   // Cycle focus to next area
   const cycleFocus = useCallback(() => {
-    setFocusArea(prev => {
-      if (prev === "sidebar") return "chat";
-      if (prev === "chat") return "input";
-      return "sidebar";
-    });
+    setFocusArea(prev => getNextFocusArea(prev));
   }, []);
 
   // Handle keyboard input for global shortcuts - disabled when typing
@@ -154,7 +146,7 @@ export default function App() {
 
   // Initialize SignalClient and check for existing accounts
   useEffect(() => {
-    debugLog(`[App] Mounting... storedReady=${storageReady}`);
+    debugLog("[App] Mounting...");
 
     // Find signal-cli path
     const signalCliPath = findSignalCliPath();
@@ -353,8 +345,8 @@ export default function App() {
       if (isStoppingRef.current) return;
 
       setConnectionStatus("disconnected");
-      if (code !== 0 && linkStatus !== "success") {
-        setLinkStatus("error");
+      if (code !== 0) {
+        setLinkStatus(prev => prev === "success" ? prev : "error");
         setErrorMessage(`signal-cli exited with code ${code}`);
       }
     });
@@ -380,16 +372,13 @@ export default function App() {
       linkStatus={linkStatus}
       errorMessage={errorMessage}
       accounts={accounts}
-      onLinkNewDevice={startLinkingProcess}
       client={client}
       selectedConversation={selectedConversation}
       onSelectConversation={handleSelectConversation}
       storage={storageReady ? storageRef.current : undefined}
       focusArea={focusArea}
-      setFocusArea={setFocusArea}
       cycleFocus={cycleFocus}
       connectionStatus={connectionStatus}
-      conversationCount={conversationCount}
     />
   );
 }

@@ -1,24 +1,25 @@
 import { useState, useEffect, useRef, memo, useMemo } from "react";
 import { Box, Text, useInput, useStdout } from "ink";
 import { SignalClient } from "../../core/SignalClient.ts";
-import type { Account, Contact, Group, Conversation } from "../../types/types.ts";
+import type { Conversation, ChatMessage } from "../../types/types.ts";
 import type { MessageStorage } from "../../core/MessageStorage.ts";
 import { normalizeNumber } from "../../utils/phone.ts";
 import { sortByRecency } from "../../utils/sortByRecency.ts";
 import { theme } from "../theme.ts";
 import { formatRelativeTime } from "../../utils/formatTime.ts";
-import type { FocusArea } from "../App.tsx";
+import {
+  moveListSelection,
+  jumpListSelection,
+  type FocusArea,
+} from "../state/navigation.ts";
 
 interface SidebarProps {
   currentView: "loading" | "onboarding" | "chat";
-  accounts?: Account[];
-  onLinkNewDevice?: () => void;
   client?: SignalClient | null;
   selectedConversation?: Conversation | null;
   onSelectConversation?: (conversation: Conversation) => void;
   storage?: MessageStorage;
   focusArea?: FocusArea;
-  setFocusArea?: (area: FocusArea) => void;
   searchMode?: boolean;
   setSearchMode?: (mode: boolean) => void;
   onConversationCountChange?: (count: number) => void;
@@ -26,14 +27,11 @@ interface SidebarProps {
 
 function Sidebar({
   currentView,
-  accounts,
-  onLinkNewDevice,
   client,
   selectedConversation,
   onSelectConversation,
   storage,
   focusArea,
-  setFocusArea,
   searchMode = false,
   setSearchMode,
   onConversationCountChange,
@@ -51,9 +49,6 @@ function Sidebar({
   useEffect(() => {
     selectedConversationIdRef.current = selectedConversation?.id ?? null;
   }, [selectedConversation?.id]);
-
-  const hasAccounts = accounts && accounts.length > 0;
-  const primaryAccount = accounts?.[0];
 
   // Calculate distinct area for list
   // Each conversation item is now 2 lines (name + preview)
@@ -124,7 +119,10 @@ function Sidebar({
   useEffect(() => {
     if (!storage || currentView !== "chat") return;
 
-    const handleNewMessage = (newMessage: any, conversationId: string) => {
+    const handleNewMessage = (
+      newMessage: Pick<ChatMessage, "timestamp" | "content">,
+      conversationId: string
+    ) => {
       setConversations(prev => {
         // Find the conversation
         const existing = prev.find(c => c.id === conversationId);
@@ -206,23 +204,31 @@ function Sidebar({
 
     // Normal mode - vim keys and arrow keys
     const moveUp = () => {
-      setSelectedIndex(prev => {
-        const newIndex = Math.max(0, prev - 1);
-        if (newIndex < scrollOffset) {
-          setScrollOffset(newIndex);
-        }
-        return newIndex;
-      });
+      const result = moveListSelection(
+        {
+          selectedIndex,
+          scrollOffset,
+          listHeight,
+          itemCount: activeList.length,
+        },
+        -1
+      );
+      setSelectedIndex(result.selectedIndex);
+      setScrollOffset(result.scrollOffset);
     };
 
     const moveDown = () => {
-      setSelectedIndex(prev => {
-        const newIndex = Math.min(activeList.length - 1, prev + 1);
-        if (newIndex >= scrollOffset + listHeight) {
-          setScrollOffset(newIndex - listHeight + 1);
-        }
-        return newIndex;
-      });
+      const result = moveListSelection(
+        {
+          selectedIndex,
+          scrollOffset,
+          listHeight,
+          itemCount: activeList.length,
+        },
+        1
+      );
+      setSelectedIndex(result.selectedIndex);
+      setScrollOffset(result.scrollOffset);
     };
 
     // Arrow keys
@@ -235,19 +241,34 @@ function Sidebar({
 
     // G for bottom
     if (input === "G") {
-      const lastIndex = activeList.length - 1;
-      setSelectedIndex(lastIndex);
-      if (lastIndex >= listHeight) {
-        setScrollOffset(lastIndex - listHeight + 1);
-      }
+      const result = jumpListSelection(
+        {
+          selectedIndex,
+          scrollOffset,
+          listHeight,
+          itemCount: activeList.length,
+        },
+        "bottom"
+      );
+      setSelectedIndex(result.selectedIndex);
+      setScrollOffset(result.scrollOffset);
       setPendingG(false);
     }
 
     // gg for top (two-key combo)
     if (input === "g") {
       if (pendingG) {
-        setSelectedIndex(0);
-        setScrollOffset(0);
+        const result = jumpListSelection(
+          {
+            selectedIndex,
+            scrollOffset,
+            listHeight,
+            itemCount: activeList.length,
+          },
+          "top"
+        );
+        setSelectedIndex(result.selectedIndex);
+        setScrollOffset(result.scrollOffset);
         setPendingG(false);
       } else {
         setPendingG(true);
