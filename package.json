@@ -11,12 +11,16 @@
     "build:macos-x64": "bun build src/ui/index.tsx --compile --target=bun-darwin-x64 --outfile dist/signal-tui-macos-x64",
     "build:macos-arm64": "bun build src/ui/index.tsx --compile --target=bun-darwin-arm64 --outfile dist/signal-tui-macos-arm64",
     "build:all": "bun run build:linux-x64 && bun run build:linux-arm64 && bun run build:macos-x64 && bun run build:macos-arm64",
+    "prepare": "husky",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "typecheck": "tsc --noEmit",
     "test": "bun test",
     "test:coverage": "bun test --coverage",
-    "check": "bun run lint && bun run typecheck && bun run test"
+    "check": "bun run lint && bun run typecheck && bun run test",
+    "precommit:staged": "lint-staged --concurrent=false",
+    "precommit:guards": "./scripts/hooks/precommit-guards.sh",
+    "precommit": "bun run precommit:staged && bun run precommit:guards && bun run check"
   },
   "devDependencies": {
     "@types/bun": "latest",
@@ -30,7 +34,9 @@
     "eslint-plugin-react": "^7.37.5",
     "eslint-plugin-react-hooks": "^7.0.1",
     "globals": "^17.3.0",
+    "husky": "^9.1.7",
     "ink-testing-library": "^4.0.0",
+    "lint-staged": "^16.2.7",
     "react-devtools-core": "^7.0.1"
   },
   "peerDependencies": {
@@ -42,5 +48,10 @@
     "ink-text-input": "^6.0.0",
     "qrcode-terminal": "^0.12.0",
     "react": "^19.2.3"
+  },
+  "lint-staged": {
+    "*.{ts,tsx,js,mjs,cjs}": [
+      "eslint --fix --max-warnings=0"
+    ]
   }
 }
